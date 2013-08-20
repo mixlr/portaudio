@@ -265,14 +265,14 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
     struct sio_hdl *hdl;
     struct sio_par par;
     unsigned mode;
-    int inch, onch;
-    PaSampleFormat ifmt, ofmt, siofmt;
+    int readChannels, writeChannels;
+    PaSampleFormat readFormat, writeFormat, deviceFormat;
 
     PA_DEBUG(("OpenStream:\n"));
 
     mode = 0;
-    inch = onch = 0;
-    ifmt = ofmt = 0;
+    readChannels = writeChannels = 0;
+    readFormat = writeFormat = 0;
     sio_initpar(&par);
 
     if (outputPar && outputPar->channelCount > 0) {
@@ -287,8 +287,8 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
         if (!SampleFormatToSndioParameters(&par, outputPar->sampleFormat)) {
             return paSampleFormatNotSupported;
         }
-        ofmt = outputPar->sampleFormat;
-        onch = par.pchan = outputPar->channelCount;
+        writeFormat = outputPar->sampleFormat;
+        writeChannels = par.pchan = outputPar->channelCount;
         mode |= SIO_PLAY;
     }
     if (inputPar && inputPar->channelCount > 0) {
@@ -303,8 +303,8 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
         if (!SampleFormatToSndioParameters(&par, inputPar->sampleFormat)) {
             return paSampleFormatNotSupported;
         }
-        ifmt = inputPar->sampleFormat;
-        inch = par.rchan = inputPar->channelCount;
+        readFormat = inputPar->sampleFormat;
+        readChannels = par.rchan = inputPar->channelCount;
         mode |= SIO_REC;
     }
     par.rate = sampleRate;
@@ -324,7 +324,7 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
         sio_close(hdl);
         return paUnanticipatedHostError;
     }
-    if (!SndioParametersToSampleFormat(&par, &siofmt)) {
+    if (!SndioParametersToSampleFormat(&par, &deviceFormat)) {
         sio_close(hdl);
         return paSampleFormatNotSupported;
     }
@@ -353,11 +353,11 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
     PaUtil_InitializeStreamRepresentation(&s->base, 
         streamCallback ? &sndioHostApi->callback : &sndioHostApi->blocking,
         streamCallback, userData);
-    PA_DEBUG(("inch = %d, onch = %d, ifmt = %x, ofmt = %x\n", 
-        inch, onch, ifmt, ofmt));
+    PA_DEBUG(("readChannels = %d, writeChannels = %d, readFormat = %x, writeFormat = %x\n", 
+        readChannels, writeChannels, readFormat, writeFormat));
     err = PaUtil_InitializeBufferProcessor(&s->bufferProcessor,
-        inch, ifmt, siofmt,
-        onch, ofmt, siofmt,
+        readChannels, readFormat, deviceFormat,
+        writeChannels, writeFormat, deviceFormat,
         sampleRate,
         streamFlags,
         framesPerBuffer,
