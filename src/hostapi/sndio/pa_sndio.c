@@ -105,7 +105,7 @@ static void sndioOnMove(void *addr, int delta)
 /*
  * convert PA encoding to sndio encoding, return true on success
  */
-static int sndioSetFmt(struct sio_par *sio, PaSampleFormat fmt)
+static int SampleFormatToSndioParameters(struct sio_par *sio, PaSampleFormat fmt)
 {
     switch (fmt & ~paNonInterleaved) {
     case paInt32:
@@ -131,7 +131,7 @@ static int sndioSetFmt(struct sio_par *sio, PaSampleFormat fmt)
         sio->bits = 8;
         break;
     default:
-        PA_DEBUG(("sndioSetFmt: %x: unsupported\n", fmt));
+        PA_DEBUG(("SampleFormatToSndioParameters: %x: unsupported\n", fmt));
         return 0;
     }
     sio->le = SIO_LE_NATIVE;
@@ -141,11 +141,11 @@ static int sndioSetFmt(struct sio_par *sio, PaSampleFormat fmt)
 /*
  * convert sndio encoding to PA encoding, return true on success
  */
-static int sndioGetFmt(struct sio_par *sio, PaSampleFormat *fmt)
+static int SndioParametersToSampleFormat(struct sio_par *sio, PaSampleFormat *fmt)
 {
     if ((sio->bps * 8 != sio->bits && !sio->msb) ||
         (sio->bps > 1 && sio->le != SIO_LE_NATIVE)) {
-	PA_DEBUG(("sndioGetFmt: bits = %u, le = %u, msb = %u, bps = %u\n",
+	PA_DEBUG(("SndioParametersToSampleFormat: bits = %u, le = %u, msb = %u, bps = %u\n",
 	    sio->bits, sio->le, sio->msb, sio->bps));
         return 0;
     }
@@ -170,7 +170,7 @@ static int sndioGetFmt(struct sio_par *sio, PaSampleFormat *fmt)
         *fmt = sio->sig ? paInt8 : paUInt8;
         break;
     default:
-        PA_DEBUG(("sndioGetFmt: %u: unsupported\n", sio->bits));
+        PA_DEBUG(("SndioParametersToSampleFormat: %u: unsupported\n", sio->bits));
         return 0;
     }
     return 1;
@@ -284,7 +284,7 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
             PA_DEBUG(("OpenStream: output specific info\n"));
             return paIncompatibleHostApiSpecificStreamInfo;
         }
-        if (!sndioSetFmt(&par, outputPar->sampleFormat)) {
+        if (!SampleFormatToSndioParameters(&par, outputPar->sampleFormat)) {
             return paSampleFormatNotSupported;
         }
         ofmt = outputPar->sampleFormat;
@@ -300,7 +300,7 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
             PA_DEBUG(("OpenStream: input specific info\n"));
             return paIncompatibleHostApiSpecificStreamInfo;
         }
-        if (!sndioSetFmt(&par, inputPar->sampleFormat)) {
+        if (!SampleFormatToSndioParameters(&par, inputPar->sampleFormat)) {
             return paSampleFormatNotSupported;
         }
         ifmt = inputPar->sampleFormat;
@@ -324,7 +324,7 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
         sio_close(hdl);
         return paUnanticipatedHostError;
     }
-    if (!sndioGetFmt(&par, &siofmt)) {
+    if (!SndioParametersToSampleFormat(&par, &siofmt)) {
         sio_close(hdl);
         return paSampleFormatNotSupported;
     }
