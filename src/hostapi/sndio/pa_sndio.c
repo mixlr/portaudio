@@ -62,16 +62,18 @@
 typedef struct PaSndioStream
 {
     PaUtilStreamRepresentation base;
-    PaUtilBufferProcessor bufproc;    /* format conversion */
-    struct sio_hdl *hdl;              /* handle for device i/o */
-    struct sio_par par;               /* current device parameters */    
-    unsigned mode;                    /* SIO_PLAY, SIO_REC or both */
-    int stopped;                      /* stop requested or not started */
-    int active;                       /* thread is running */
-    unsigned long long realpos;       /* frame number h/w is processing */
-    char *rbuf, *wbuf;                /* bounce buffers for conversions */
-    unsigned long long rpos, wpos;    /* bytes read/written */
-    pthread_t thread;                 /* thread of the callback interface */
+    PaUtilBufferProcessor bufferProcessor;    /* format conversion */
+    struct sio_hdl *hdl;                      /* handle for device i/o */
+    struct sio_par par;                       /* device parameters */    
+    unsigned mode;                            /* SIO_PLAY, SIO_REC or both */
+    int stopped;                              /* stop requested */
+    int active;                               /* call-back thread is running */
+    unsigned long long framesProcessed;       /* frames h/w has processed */
+    char *readBuffer;
+    char *writeBuffer;
+    unsigned long long bytesRead;
+    unsigned long long bytesWritten;
+    pthread_t thread;                         /* for the callback interface */
 } PaSndioStream;
 
 /*
@@ -97,7 +99,7 @@ static void sndioOnMove(void *addr, int delta)
 {
     PaSndioStream *s = (PaSndioStream *)addr;
 
-    s->realpos += delta;
+    s->framesProcessed += delta;
 }
 
 /*
@@ -194,7 +196,7 @@ static void *sndioThread(void *arg)
     while (!s->stopped) {
         if (s->mode & SIO_REC) {
             todo = rblksz;
-            data = s->rbuf;
+            data = s->readBuffer;
             while (todo > 0) {
                 n = sio_read(s->hdl, data, todo);
                 if (n == 0) {
@@ -204,28 +206,28 @@ static void *sndioThread(void *arg)
                 todo -= n;
                 data += n;
             }
-            s->rpos += s->par.round;
+            s->bytesRead += s->par.round;
             ti.inputBufferAdcTime = 
-                (double)s->realpos / s->par.rate;
+                (double)s->framesProcessed / s->par.rate;
         }
         if (s->mode & SIO_PLAY) {
             ti.outputBufferDacTime =
-                (double)(s->realpos + s->par.bufsz) / s->par.rate;
+                (double)(s->framesProcessed + s->par.bufsz) / s->par.rate;
         }
-        ti.currentTime = s->realpos / (double)s->par.rate;
-        PaUtil_BeginBufferProcessing(&s->bufproc, &ti, 0);
+        ti.currentTime = s->framesProcessed / (double)s->par.rate;
+        PaUtil_BeginBufferProcessing(&s->bufferProcessor, &ti, 0);
         if (s->mode & SIO_PLAY) {
-            PaUtil_SetOutputFrameCount(&s->bufproc, s->par.round);
-            PaUtil_SetInterleavedOutputChannels(&s->bufproc,
-                0, s->wbuf, s->par.pchan);
+            PaUtil_SetOutputFrameCount(&s->bufferProcessor, s->par.round);
+            PaUtil_SetInterleavedOutputChannels(&s->bufferProcessor,
+                0, s->writeBuffer, s->par.pchan);
         }
         if (s->mode & SIO_REC) {
-            PaUtil_SetInputFrameCount(&s->bufproc, s->par.round);
-            PaUtil_SetInterleavedInputChannels(&s->bufproc,
-                0, s->rbuf, s->par.rchan);
+            PaUtil_SetInputFrameCount(&s->bufferProcessor, s->par.round);
+            PaUtil_SetInterleavedInputChannels(&s->bufferProcessor,
+                0, s->readBuffer, s->par.rchan);
         }
         result = paContinue;
-        n = PaUtil_EndBufferProcessing(&s->bufproc, &result);
+        n = PaUtil_EndBufferProcessing(&s->bufferProcessor, &result);
         if (n != s->par.round) {
             PA_DEBUG(("sndioThread: %d < %u frames, result = %d\n",
 		      n, s->par.round, result));
@@ -234,12 +236,12 @@ static void *sndioThread(void *arg)
             break;
         }
         if (s->mode & SIO_PLAY) {
-            n = sio_write(s->hdl, s->wbuf, wblksz);
+            n = sio_write(s->hdl, s->writeBuffer, wblksz);
             if (n < wblksz) {
                 PA_DEBUG(("sndioThread: sio_write failed\n"));
                 goto failed;
             }
-            s->wpos += s->par.round;
+            s->bytesWritten += s->par.round;
         }
     }
  failed:
@@ -353,7 +355,7 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
         streamCallback, userData);
     PA_DEBUG(("inch = %d, onch = %d, ifmt = %x, ofmt = %x\n", 
         inch, onch, ifmt, ofmt));
-    err = PaUtil_InitializeBufferProcessor(&s->bufproc,
+    err = PaUtil_InitializeBufferProcessor(&s->bufferProcessor,
         inch, ifmt, siofmt,
         onch, ofmt, siofmt,
         sampleRate,
@@ -369,19 +371,19 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
         return err;
     }
     if (mode & SIO_REC) {
-        s->rbuf = malloc(par.round * par.rchan * par.bps);
-        if (s->rbuf == NULL) {
-            PA_DEBUG(("OpenStream: failed to allocate rbuf\n"));
+        s->readBuffer = malloc(par.round * par.rchan * par.bps);
+        if (s->readBuffer == NULL) {
+            PA_DEBUG(("OpenStream: failed to allocate readBuffer\n"));
             PaUtil_FreeMemory(s);
             sio_close(hdl);
             return paInsufficientMemory;
         }
     }
     if (mode & SIO_PLAY) {
-        s->wbuf = malloc(par.round * par.pchan * par.bps);
-        if (s->wbuf == NULL) {
-            PA_DEBUG(("OpenStream: failed to allocate wbuf\n"));
-            free(s->rbuf);
+        s->writeBuffer = malloc(par.round * par.pchan * par.bps);
+        if (s->writeBuffer == NULL) {
+            PA_DEBUG(("OpenStream: failed to allocate writeBuffer\n"));
+            free(s->readBuffer);
             PaUtil_FreeMemory(s);
             sio_close(hdl);
             return paInsufficientMemory;
@@ -389,7 +391,7 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
     }    
     s->base.streamInfo.inputLatency = 0;
     s->base.streamInfo.outputLatency = (mode & SIO_PLAY) ?
-        (double)(par.bufsz + PaUtil_GetBufferProcessorOutputLatencyFrames(&s->bufproc)) / (double)par.rate : 0;
+        (double)(par.bufsz + PaUtil_GetBufferProcessorOutputLatencyFrames(&s->bufferProcessor)) / (double)par.rate : 0;
     s->base.streamInfo.sampleRate = par.rate;
     s->active = 0;
     s->stopped = 1;
@@ -411,7 +413,7 @@ static PaError BlockingReadStream(PaStream *stream, void *data, unsigned long nu
         n = s->par.round;
         if (n > numFrames)
             n = numFrames;
-        buf = s->rbuf;
+        buf = s->readBuffer;
         todo = n * s->par.rchan * s->par.bps;
         while (todo > 0) {
             res = sio_read(s->hdl, buf, todo);
@@ -420,10 +422,10 @@ static PaError BlockingReadStream(PaStream *stream, void *data, unsigned long nu
             buf = (char *)buf + res;
             todo -= res;
         }
-        s->rpos += n;
-        PaUtil_SetInputFrameCount(&s->bufproc, n);
-        PaUtil_SetInterleavedInputChannels(&s->bufproc, 0, s->rbuf, s->par.rchan);
-        res = PaUtil_CopyInput(&s->bufproc, &data, n);
+        s->bytesRead += n;
+        PaUtil_SetInputFrameCount(&s->bufferProcessor, n);
+        PaUtil_SetInterleavedInputChannels(&s->bufferProcessor, 0, s->readBuffer, s->par.rchan);
+        res = PaUtil_CopyInput(&s->bufferProcessor, &data, n);
         if (res != n) {
             PA_DEBUG(("BlockingReadStream: copyInput: %u != %u\n"));
             return paUnanticipatedHostError;
@@ -442,17 +444,17 @@ static PaError BlockingWriteStream(PaStream* stream, const void *data, unsigned 
         n = s->par.round;
         if (n > numFrames)
             n = numFrames;
-        PaUtil_SetOutputFrameCount(&s->bufproc, n);
-        PaUtil_SetInterleavedOutputChannels(&s->bufproc, 0, s->wbuf, s->par.pchan);
-        res = PaUtil_CopyOutput(&s->bufproc, &data, n);
+        PaUtil_SetOutputFrameCount(&s->bufferProcessor, n);
+        PaUtil_SetInterleavedOutputChannels(&s->bufferProcessor, 0, s->writeBuffer, s->par.pchan);
+        res = PaUtil_CopyOutput(&s->bufferProcessor, &data, n);
         if (res != n) {
             PA_DEBUG(("BlockingWriteStream: copyOutput: %u != %u\n"));
             return paUnanticipatedHostError;
         }
-        res = sio_write(s->hdl, s->wbuf, n * s->par.pchan * s->par.bps);
+        res = sio_write(s->hdl, s->writeBuffer, n * s->par.pchan * s->par.bps);
         if (res == 0)
             return paUnanticipatedHostError;        
-        s->wpos += n;
+        s->bytesWritten += n;
         numFrames -= n;
     }
     return paNoError;
@@ -475,7 +477,7 @@ static signed long BlockingGetStreamReadAvailable(PaStream *stream)
     if (!(events & POLLIN))
         return 0;
 
-    return s->realpos - s->rpos;
+    return s->framesProcessed - s->bytesRead;
 }
 
 static signed long BlockingGetStreamWriteAvailable(PaStream *stream)
@@ -495,7 +497,7 @@ static signed long BlockingGetStreamWriteAvailable(PaStream *stream)
     if (!(events & POLLOUT))
         return 0;
 
-    return s->par.bufsz - (s->wpos - s->realpos);
+    return s->par.bufsz - (s->bytesWritten - s->framesProcessed);
 }
 
 static PaError BlockingWaitEmpty( PaStream *stream )
@@ -525,10 +527,10 @@ static PaError StartStream(PaStream *stream)
     }
     s->stopped = 0;
     s->active = 1;
-    s->realpos = 0;
-    s->wpos = 0;
-    s->rpos = 0;
-    PaUtil_ResetBufferProcessor(&s->bufproc);
+    s->framesProcessed = 0;
+    s->bytesWritten = 0;
+    s->bytesRead = 0;
+    PaUtil_ResetBufferProcessor(&s->bufferProcessor);
     if (!sio_start(s->hdl))
         return paUnanticipatedHostError;
 
@@ -537,9 +539,9 @@ static PaError StartStream(PaStream *stream)
      */
     if (s->mode & SIO_PLAY) {
         wblksz = s->par.round * s->par.pchan * s->par.bps;
-        memset(s->wbuf, 0, wblksz);
+        memset(s->writeBuffer, 0, wblksz);
         for (primes = s->par.bufsz / s->par.round; primes > 0; primes--)
-            s->wpos += sio_write(s->hdl, s->wbuf, wblksz);
+            s->bytesWritten += sio_write(s->hdl, s->writeBuffer, wblksz);
     }
     if (s->base.streamCallback) {
         err = pthread_create(&s->thread, NULL, sndioThread, s);
@@ -587,12 +589,12 @@ static PaError CloseStream(PaStream *stream)
         StopStream(stream);
 
     if (s->mode & SIO_REC)
-        free(s->rbuf);
+        free(s->readBuffer);
     if (s->mode & SIO_PLAY)
-        free(s->wbuf);
+        free(s->writeBuffer);
     sio_close(s->hdl);
         PaUtil_TerminateStreamRepresentation(&s->base);
-    PaUtil_TerminateBufferProcessor(&s->bufproc);
+    PaUtil_TerminateBufferProcessor(&s->bufferProcessor);
     PaUtil_FreeMemory(s);
     return paNoError;
 }
@@ -626,7 +628,7 @@ static PaTime GetStreamTime(PaStream *stream)
 {
     PaSndioStream *s = (PaSndioStream *)stream;
 
-    return (double)s->realpos / s->base.streamInfo.sampleRate;
+    return (double)s->framesProcessed / s->base.streamInfo.sampleRate;
 }
 
 static PaError IsFormatSupported(struct PaUtilHostApiRepresentation *hostApi,
