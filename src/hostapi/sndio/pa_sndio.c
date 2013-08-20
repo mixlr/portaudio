@@ -74,6 +74,8 @@ typedef struct PaSndioStream
     unsigned long long bytesRead;
     unsigned long long bytesWritten;
     pthread_t thread;                         /* for the callback interface */
+    struct pollfd *pfds;
+    int nfds;
 } PaSndioStream;
 
 /*
@@ -388,7 +390,9 @@ static PaError OpenStream(struct PaUtilHostApiRepresentation *hostApi,
             sio_close(hdl);
             return paInsufficientMemory;
         }
-    }    
+    }
+    s->nfds = sio_nfds(hdl);
+    s->pfds = malloc(sizeof(struct pollfd) * s->nfds);
     s->base.streamInfo.inputLatency = 0;
     s->base.streamInfo.outputLatency = (mode & SIO_PLAY) ?
         (double)(par.bufsz + PaUtil_GetBufferProcessorOutputLatencyFrames(&s->bufferProcessor)) / (double)par.rate : 0;
@@ -463,17 +467,16 @@ static PaError BlockingWriteStream(PaStream* stream, const void *data, unsigned 
 static signed long BlockingGetStreamReadAvailable(PaStream *stream)
 {
     PaSndioStream *s = (PaSndioStream *)stream;
-    struct pollfd pfd;
     int n, events;
 
-    n = sio_pollfd(s->hdl, &pfd, POLLIN);
-    while (poll(&pfd, n, 0) < 0) {
+    n = sio_pollfd(s->hdl, s->pfds, POLLIN);
+    while (poll(s->pfds, n, 0) < 0) {
         if (errno == EINTR)
             continue;
         perror("poll");
         abort();
     }
-    events = sio_revents(s->hdl, &pfd);
+    events = sio_revents(s->hdl, s->pfds);
     if (!(events & POLLIN))
         return 0;
 
@@ -483,17 +486,16 @@ static signed long BlockingGetStreamReadAvailable(PaStream *stream)
 static signed long BlockingGetStreamWriteAvailable(PaStream *stream)
 {
     PaSndioStream *s = (PaSndioStream *)stream;
-    struct pollfd pfd;
     int n, events;
 
-    n = sio_pollfd(s->hdl, &pfd, POLLOUT);
-    while (poll(&pfd, n, 0) < 0) {
+    n = sio_pollfd(s->hdl, s->pfds, POLLOUT);
+    while (poll(s->pfds, n, 0) < 0) {
         if (errno == EINTR)
             continue;
         perror("poll");
         abort();
     }
-    events = sio_revents(s->hdl, &pfd);
+    events = sio_revents(s->hdl, s->pfds);
     if (!(events & POLLOUT))
         return 0;
 
@@ -594,6 +596,7 @@ static PaError CloseStream(PaStream *stream)
         free(s->writeBuffer);
     sio_close(s->hdl);
         PaUtil_TerminateStreamRepresentation(&s->base);
+    free(s->pfds);
     PaUtil_TerminateBufferProcessor(&s->bufferProcessor);
     PaUtil_FreeMemory(s);
     return paNoError;
