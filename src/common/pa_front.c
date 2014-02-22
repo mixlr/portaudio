@@ -76,16 +76,15 @@
 #include "pa_trace.h" /* still usefull?*/
 #include "pa_debugprint.h"
 
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
 
-#define PA_VERSION_  1899
-#define PA_VERSION_TEXT_ "PortAudio V19-devel (built " __DATE__  " " __TIME__ ")"
-
-
-
+#define PA_VERSION_STRING_  TOSTRING(paVersionMajor) "." TOSTRING(paVersionMinor) "." TOSTRING(paVersionRevision)
+#define PA_VERSION_TEXT_    "PortAudio V" PA_VERSION_STRING_ "-devel (built " __DATE__  " " __TIME__ ")"
 
 int Pa_GetVersion( void )
 {
-    return PA_VERSION_;
+    return paVersion;
 }
 
 

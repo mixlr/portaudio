@@ -50,15 +50,35 @@ extern "C"
 {
 #endif /* __cplusplus */
 
+/** This is incremented when there are significant changes that may affect the API. */
+#define paVersionMajor     20
+    
+/** This is incremented when there are important bug fixes or additional features.
+ * Or it is set to zero when paVersionMajor is incremented.
+ */
+#define paVersionMinor      0
+    
+/** This is incremented on every release. Or it is set to zero when paVersionMajor
+ * or paVersionMinor is incremented. */
+#define paVersionRevision   0
+    
+/** This is a combination of paVersionMajor, paVersionMinor and paVersionRevision.
+ * It will always increase so that version numbers can be compared as integers to see which is
+ * later.
+ * You can reference paVersion in your software to record what version you compiled with.
+ * That can be compared with the result of Pa_GetVersion(), which may be different if you
+ * are using a dynamically linked library.
+ */
+#define paVersion  ((paVersionMajor << 16) + (paVersionMinor << 8) + paVersionRevision)
  
-/** Retrieve the release number of the currently running PortAudio build,
- eg 1900.
-*/
+/** Retrieve the release number of the currently running PortAudio build.
+ * For example, for version "20.1.3" this will return 0x00140103.
+ */
 int Pa_GetVersion( void );
 
 
 /** Retrieve a textual description of the current PortAudio build,
- eg "PortAudio V19-devel 13 October 2002".
+ eg "PortAudio V20.0.0-devel (built Feb 22 2014 12:32:50)".
 */
 const char* Pa_GetVersionText( void );
 
