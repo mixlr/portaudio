@@ -104,7 +104,6 @@ void PaWin_InitializeWaveFormatExtensible( PaWinWaveFormat *waveFormat,
     *((GUID*)&waveFormat->fields[PAWIN_INDEXOF_SUBFORMAT]) = guid;
 }
 
-
 PaWinWaveFormatChannelMask PaWin_DefaultChannelMask( int numChannels )
 {
 	switch( numChannels ){
