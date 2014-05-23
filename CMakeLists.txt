@@ -267,6 +267,16 @@ SOURCE_GROUP("os\\win" FILES
   ${PA_PLATFORM_SOURCES}
 )
 ENDIF(WIN32)
+IF(APPLE)
+SET(PA_PLATFORM_SOURCES
+  src/os/unix/pa_unix_util.c
+  src/os/unix/pa_unix_hostapis.c
+  src/hostapi/coreaudio/pa_mac_core_utilities.c
+  src/hostapi/coreaudio/pa_mac_core.c
+  src/hostapi/coreaudio/pa_mac_core_blocking.c
+)
+ADD_DEFINITIONS(-DPA_USE_COREAUDIO=1)
+ENDIF(APPLE)
 
 INCLUDE_DIRECTORIES( include )
 INCLUDE_DIRECTORIES( src/common )
@@ -289,13 +299,13 @@ SET(SOURCES_LESS_ASIO_SDK
   ${PA_PLATFORM_SOURCES}
 )
 
-IF(PA_UNICODE_BUILD)
+IF(WIN32 AND PA_UNICODE_BUILD)
 SET_SOURCE_FILES_PROPERTIES(
   ${SOURCES_LESS_ASIO_SDK}
   PROPERTIES
   COMPILE_DEFINITIONS "UNICODE;_UNICODE"
 )
-ENDIF(PA_UNICODE_BUILD)
+ENDIF(WIN32 AND PA_UNICODE_BUILD)
 
 ADD_LIBRARY(portaudio SHARED
   ${PA_INCLUDES}
@@ -341,18 +351,23 @@ SET_TARGET_PROPERTIES(portaudio PROPERTIES OUTPUT_NAME portaudio_${TARGET_POSTFI
 SET_TARGET_PROPERTIES(portaudio_static PROPERTIES OUTPUT_NAME portaudio_static_${TARGET_POSTFIX})
 ENDIF(WIN32)
 
+IF(APPLE)
+TARGET_LINK_LIBRARIES(portaudio "-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework Carbon")
+TARGET_LINK_LIBRARIES(portaudio_static "-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework Carbon")
+ENDIF(APPLE)
+
 OPTION(PA_BUILD_TESTS "Include test projects" OFF)
 OPTION(PA_BUILD_EXAMPLES "Include example projects" OFF)
 MARK_AS_ADVANCED(PORTAUDIO_BUILD_TESTS)
 
 # Prepared for inclusion of test files
 IF(PA_BUILD_TESTS)
-SUBDIRS(test)
+ADD_SUBDIRECTORY(test)
 ENDIF(PA_BUILD_TESTS)
 
 # Prepared for inclusion of test files
 IF(PA_BUILD_EXAMPLES)
-SUBDIRS(examples)
+ADD_SUBDIRECTORY(examples)
 ENDIF(PA_BUILD_EXAMPLES)
 
 #################################
