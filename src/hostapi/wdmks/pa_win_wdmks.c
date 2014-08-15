@@ -3006,8 +3006,8 @@ PaWinWdmFilter** BuildFilterList( int* pFilterCount, int* pNoOfPaDevices, PaErro
     SP_DEVICE_INTERFACE_DATA aliasData;
     SP_DEVINFO_DATA devInfoData;
     int noError;
-    const int sizeInterface = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA) + (MAX_PATH * sizeof(WCHAR));
-    unsigned char interfaceDetailsArray[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA) + (MAX_PATH * sizeof(WCHAR))];
+    const int sizeInterface = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + (MAX_PATH * sizeof(WCHAR));
+    unsigned char interfaceDetailsArray[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + (MAX_PATH * sizeof(WCHAR))];
     SP_DEVICE_INTERFACE_DETAIL_DATA_W* devInterfaceDetails = (SP_DEVICE_INTERFACE_DETAIL_DATA_W*)interfaceDetailsArray;
     const GUID* category = (const GUID*)&KSCATEGORY_AUDIO;
     const GUID* alias_render = (const GUID*)&KSCATEGORY_RENDER;
@@ -3029,7 +3029,7 @@ PaWinWdmFilter** BuildFilterList( int* pFilterCount, int* pNoOfPaDevices, PaErro
     *pNoOfPaDevices = 0;
 
     /* Open a handle to search for devices (filters) */
-    handle = SetupDiGetClassDevs(category,NULL,NULL,DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    handle = SetupDiGetClassDevsW(category,NULL,NULL,DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if( handle == INVALID_HANDLE_VALUE )
     {
         *pResult = paUnanticipatedHostError;
@@ -3041,9 +3041,9 @@ PaWinWdmFilter** BuildFilterList( int* pFilterCount, int* pNoOfPaDevices, PaErro
     invalidDevices = 0;
     for( device = 0;;device++ )
     {
-        interfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+        interfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
         interfaceData.Reserved = 0;
-        aliasData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+        aliasData.cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
         aliasData.Reserved = 0;
         noError = SetupDiEnumDeviceInterfaces(handle,NULL,category,device,&interfaceData);
         PA_DEBUG(("Enum called\n"));
