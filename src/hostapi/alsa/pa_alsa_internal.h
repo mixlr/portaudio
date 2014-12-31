@@ -1,7 +1,5 @@
-#ifndef PA_ALSA_INTERNAL_H
-#define PA_ALSA_INTERNAL_H
 /*
- * $Id: pa_alsa_internal.h 1911 2014-12-17 12:44:09Z gineera $
+ * $Id$
  * PortAudio Portable Real-Time Audio Library
  * Latest Version at: http://www.portaudio.com
  * ALSA implementation by Joshua Haberman and Arve Knudsen
@@ -45,6 +43,8 @@
  * license above.
  */
 
+#ifndef PA_ALSA_INTERNAL_H
+#define PA_ALSA_INTERNAL_H
 
 /* Check return value of ALSA function, and map it to PaError */
 #define ENSURE_(expr, code) \
@@ -112,4 +112,4 @@ int Alsa_SetApproximateSampleRate( snd_pcm_t *pcm, snd_pcm_hw_params_t *hwParams
 int Alsa_OpenPcm( snd_pcm_t **pcmp, const char *name, snd_pcm_stream_t stream, int mode, int waitOnBusy );
 PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi );
 
-#endif
+#endif /* PA_ALSA_INTERNAL_H */

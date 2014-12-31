@@ -1,5 +1,5 @@
 /*
- * $Id: pa_alsa_load_dyn.c 1911 2014-12-17 12:44:09Z gineera $
+ * $Id$
  * PortAudio Portable Real-Time Audio Library
  * Latest Version at: http://www.portaudio.com
  * ALSA implementation by Joshua Haberman and Arve Knudsen

@@ -1,7 +1,5 @@
-#ifndef PA_ALSA_LOAD_DYN_H
-#define PA_ALSA_LOAD_DYN_H
 /*
- * $Id: pa_alsa_load_dyn.h 1911 2014-12-17 12:44:09Z gineera $
+ * $Id$
  * PortAudio Portable Real-Time Audio Library
  * Latest Version at: http://www.portaudio.com
  * ALSA implementation by Joshua Haberman and Arve Knudsen
@@ -45,6 +43,8 @@
  * license above.
  */
 
+#ifndef PA_ALSA_LOAD_DYN_H
+#define PA_ALSA_LOAD_DYN_H
 
 /* #define PA_ALSA_DYNAMIC  Adding this define here or in project build enables dynamic loading */
 
@@ -206,4 +206,4 @@ void AlsaLoad_SetLibraryPathName( const char *pathName );
 int AlsaLoad_OpenLibrary();
 void AlsaLoad_CloseLibrary();
 
-#endif
+#endif /* PA_ALSA_LOAD_DYN_H */
