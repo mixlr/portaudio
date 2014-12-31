@@ -7,6 +7,7 @@
  * Copyright (c) 2002 Joshua Haberman <joshua@haberman.com>
  * Copyright (c) 2005-2009 Arve Knudsen <arve.knudsen@gmail.com>
  * Copyright (c) 2008 Kevin Kofler <kevin.kofler@chello.at>
+ * Copyright (c) 2014 Alan Horstmann <gineera@aspect135.co.uk>
  *
  * Based on the Open Source API proposed by Ross Bencina
  * Copyright (c) 1999-2002 Ross Bencina, Phil Burk
@@ -62,9 +63,6 @@
 #include <time.h>
 #include <sys/mman.h>
 #include <signal.h> /* For sig_atomic_t */
-#ifdef PA_ALSA_DYNAMIC
-    #include <dlfcn.h> /* For dlXXX functions */
-#endif
 
 #include "portaudio.h"
 #include "pa_util.h"
@@ -78,6 +76,8 @@
 #include "pa_debugprint.h"
 
 #include "pa_linux_alsa.h"
+#include "pa_alsa_internal.h"
+#include "pa_alsa_load_dyn.h"
 
 /* Add missing define (for compatibility with older ALSA versions) */
 #ifndef SND_PCM_TSTAMP_ENABLE
@@ -90,514 +90,7 @@
 /* The acceptable tolerance of sample rate set, to that requested (as a ratio, eg 50 is 2%, 100 is 1%) */
 #define RATE_MAX_DEVIATE_RATIO 100
 
-/* Defines Alsa function types and pointers to these functions. */
-#define _PA_DEFINE_FUNC(x)  typedef typeof(x) x##_ft; static x##_ft *alsa_##x = 0
 
-/* Alloca helper. */
-#define __alsa_snd_alloca(ptr,type) do { size_t __alsa_alloca_size = alsa_##type##_sizeof(); (*ptr) = (type##_t *) alloca(__alsa_alloca_size); memset(*ptr, 0, __alsa_alloca_size); } while (0)
-
-_PA_DEFINE_FUNC(snd_pcm_open);
-_PA_DEFINE_FUNC(snd_pcm_close);
-_PA_DEFINE_FUNC(snd_pcm_nonblock);
-_PA_DEFINE_FUNC(snd_pcm_frames_to_bytes);
-_PA_DEFINE_FUNC(snd_pcm_prepare);
-_PA_DEFINE_FUNC(snd_pcm_start);
-_PA_DEFINE_FUNC(snd_pcm_resume);
-_PA_DEFINE_FUNC(snd_pcm_wait);
-_PA_DEFINE_FUNC(snd_pcm_state);
-_PA_DEFINE_FUNC(snd_pcm_avail_update);
-_PA_DEFINE_FUNC(snd_pcm_areas_silence);
-_PA_DEFINE_FUNC(snd_pcm_mmap_begin);
-_PA_DEFINE_FUNC(snd_pcm_mmap_commit);
-_PA_DEFINE_FUNC(snd_pcm_readi);
-_PA_DEFINE_FUNC(snd_pcm_readn);
-_PA_DEFINE_FUNC(snd_pcm_writei);
-_PA_DEFINE_FUNC(snd_pcm_writen);
-_PA_DEFINE_FUNC(snd_pcm_drain);
-_PA_DEFINE_FUNC(snd_pcm_recover);
-_PA_DEFINE_FUNC(snd_pcm_drop);
-_PA_DEFINE_FUNC(snd_pcm_area_copy);
-_PA_DEFINE_FUNC(snd_pcm_poll_descriptors);
-_PA_DEFINE_FUNC(snd_pcm_poll_descriptors_count);
-_PA_DEFINE_FUNC(snd_pcm_poll_descriptors_revents);
-_PA_DEFINE_FUNC(snd_pcm_format_size);
-_PA_DEFINE_FUNC(snd_pcm_link);
-_PA_DEFINE_FUNC(snd_pcm_delay);
-
-_PA_DEFINE_FUNC(snd_pcm_hw_params_sizeof);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_malloc);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_free);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_any);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_access);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_format);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_channels);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_set_periods_near);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_rate_near); //!!!
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_rate);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_rate_resample);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_set_buffer_time_near);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_buffer_size);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_buffer_size_near); //!!!
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_buffer_size_min);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_set_period_time_near);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_period_size_near);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_periods_integer);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_periods_min);
-
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_buffer_size);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_get_period_size);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_get_access);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_get_periods);
-//_PA_DEFINE_FUNC(snd_pcm_hw_params_get_rate);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_channels_min);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_channels_max);
-
-_PA_DEFINE_FUNC(snd_pcm_hw_params_test_period_size);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_test_format);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_test_access);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_dump);
-_PA_DEFINE_FUNC(snd_pcm_hw_params);
-
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_periods_min);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_periods_max);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_set_period_size);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_period_size_min);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_period_size_max);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_buffer_size_max);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_rate_min);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_rate_max);
-_PA_DEFINE_FUNC(snd_pcm_hw_params_get_rate_numden);
-#define alsa_snd_pcm_hw_params_alloca(ptr) __alsa_snd_alloca(ptr, snd_pcm_hw_params)
-
-_PA_DEFINE_FUNC(snd_pcm_sw_params_sizeof);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_malloc);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_current);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_avail_min);
-_PA_DEFINE_FUNC(snd_pcm_sw_params);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_free);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_start_threshold);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_stop_threshold);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_get_boundary);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_silence_threshold);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_silence_size);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_xfer_align);
-_PA_DEFINE_FUNC(snd_pcm_sw_params_set_tstamp_mode);
-#define alsa_snd_pcm_sw_params_alloca(ptr) __alsa_snd_alloca(ptr, snd_pcm_sw_params)
-
-_PA_DEFINE_FUNC(snd_pcm_info);
-_PA_DEFINE_FUNC(snd_pcm_info_sizeof);
-_PA_DEFINE_FUNC(snd_pcm_info_malloc);
-_PA_DEFINE_FUNC(snd_pcm_info_free);
-_PA_DEFINE_FUNC(snd_pcm_info_set_device);
-_PA_DEFINE_FUNC(snd_pcm_info_set_subdevice);
-_PA_DEFINE_FUNC(snd_pcm_info_set_stream);
-_PA_DEFINE_FUNC(snd_pcm_info_get_name);
-_PA_DEFINE_FUNC(snd_pcm_info_get_card);
-#define alsa_snd_pcm_info_alloca(ptr) __alsa_snd_alloca(ptr, snd_pcm_info)
-
-_PA_DEFINE_FUNC(snd_ctl_pcm_next_device);
-_PA_DEFINE_FUNC(snd_ctl_pcm_info);
-_PA_DEFINE_FUNC(snd_ctl_open);
-_PA_DEFINE_FUNC(snd_ctl_close);
-_PA_DEFINE_FUNC(snd_ctl_card_info_malloc);
-_PA_DEFINE_FUNC(snd_ctl_card_info_free);
-_PA_DEFINE_FUNC(snd_ctl_card_info);
-_PA_DEFINE_FUNC(snd_ctl_card_info_sizeof);
-_PA_DEFINE_FUNC(snd_ctl_card_info_get_name);
-#define alsa_snd_ctl_card_info_alloca(ptr) __alsa_snd_alloca(ptr, snd_ctl_card_info)
-
-_PA_DEFINE_FUNC(snd_config);
-_PA_DEFINE_FUNC(snd_config_update);
-_PA_DEFINE_FUNC(snd_config_search);
-_PA_DEFINE_FUNC(snd_config_iterator_entry);
-_PA_DEFINE_FUNC(snd_config_iterator_first);
-_PA_DEFINE_FUNC(snd_config_iterator_end);
-_PA_DEFINE_FUNC(snd_config_iterator_next);
-_PA_DEFINE_FUNC(snd_config_get_string);
-_PA_DEFINE_FUNC(snd_config_get_id);
-_PA_DEFINE_FUNC(snd_config_update_free_global);
-
-_PA_DEFINE_FUNC(snd_pcm_status);
-_PA_DEFINE_FUNC(snd_pcm_status_sizeof);
-_PA_DEFINE_FUNC(snd_pcm_status_get_tstamp);
-_PA_DEFINE_FUNC(snd_pcm_status_get_state);
-_PA_DEFINE_FUNC(snd_pcm_status_get_trigger_tstamp);
-_PA_DEFINE_FUNC(snd_pcm_status_get_delay);
-#define alsa_snd_pcm_status_alloca(ptr) __alsa_snd_alloca(ptr, snd_pcm_status)
-
-_PA_DEFINE_FUNC(snd_card_next);
-_PA_DEFINE_FUNC(snd_asoundlib_version);
-_PA_DEFINE_FUNC(snd_strerror);
-_PA_DEFINE_FUNC(snd_output_stdio_attach);
-
-#define alsa_snd_config_for_each(pos, next, node)\
-    for (pos = alsa_snd_config_iterator_first(node),\
-         next = alsa_snd_config_iterator_next(pos);\
-         pos != alsa_snd_config_iterator_end(node); pos = next, next = alsa_snd_config_iterator_next(pos))
-
-#undef _PA_DEFINE_FUNC
-
-/* Redefine 'PA_ALSA_PATHNAME' to a different Alsa library name if desired. */
-#ifndef PA_ALSA_PATHNAME
-    #define PA_ALSA_PATHNAME "libasound.so"
-#endif
-static const char *g_AlsaLibName = PA_ALSA_PATHNAME;
-
-/* Handle to dynamically loaded library. */
-static void *g_AlsaLib = NULL;
-
-#ifdef PA_ALSA_DYNAMIC
-
-#define _PA_LOCAL_IMPL(x) __pa_local_##x
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_set_rate_near) (snd_pcm_t *pcm, snd_pcm_hw_params_t *params, unsigned int *val, int *dir)
-{
-    int ret;
-
-    if(( ret = alsa_snd_pcm_hw_params_set_rate(pcm, params, (*val), (*dir)) ) < 0 )
-        return ret;
-
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_set_buffer_size_near) (snd_pcm_t *pcm, snd_pcm_hw_params_t *params, snd_pcm_uframes_t *val)
-{
-    int ret;
-
-    if(( ret = alsa_snd_pcm_hw_params_set_buffer_size(pcm, params, (*val)) ) < 0 )
-        return ret;
-
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_set_period_size_near) (snd_pcm_t *pcm, snd_pcm_hw_params_t *params, snd_pcm_uframes_t *val, int *dir)
-{
-    int ret;
-
-    if(( ret = alsa_snd_pcm_hw_params_set_period_size(pcm, params, (*val), (*dir)) ) < 0 )
-        return ret;
-
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_channels_min) (const snd_pcm_hw_params_t *params, unsigned int *val)
-{
-    (*val) = 1;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_channels_max) (const snd_pcm_hw_params_t *params, unsigned int *val)
-{
-    (*val) = 2;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_periods_min) (const snd_pcm_hw_params_t *params, unsigned int *val, int *dir)
-{
-    (*val) = 2;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_periods_max) (const snd_pcm_hw_params_t *params, unsigned int *val, int *dir)
-{
-    (*val) = 8;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_period_size_min) (const snd_pcm_hw_params_t *params, snd_pcm_uframes_t *frames, int *dir)
-{
-    (*frames) = 64;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_period_size_max) (const snd_pcm_hw_params_t *params, snd_pcm_uframes_t *frames, int *dir)
-{
-    (*frames) = 512;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_buffer_size_max) (const snd_pcm_hw_params_t *params, snd_pcm_uframes_t *val)
-{
-    int ret;
-    int dir                = 0;
-    snd_pcm_uframes_t pmax = 0;
-    unsigned int      pcnt = 0;
-
-    if(( ret = _PA_LOCAL_IMPL(snd_pcm_hw_params_get_period_size_max)(params, &pmax, &dir) ) < 0 )
-        return ret;
-    if(( ret = _PA_LOCAL_IMPL(snd_pcm_hw_params_get_periods_max)(params, &pcnt, &dir) ) < 0 )
-        return ret;
-
-    (*val) = pmax * pcnt;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_rate_min) (const snd_pcm_hw_params_t *params, unsigned int *val, int *dir)
-{
-    (*val) = 44100;
-    return 0;
-}
-
-int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_rate_max) (const snd_pcm_hw_params_t *params, unsigned int *val, int *dir)
-{
-    (*val) = 44100;
-    return 0;
-}
-
-#endif // PA_ALSA_DYNAMIC
-
-/* Trying to load Alsa library dynamically if 'PA_ALSA_DYNAMIC' is defined, othervise
-   will link during compilation.
-*/
-static int PaAlsa_LoadLibrary()
-{
-#ifdef PA_ALSA_DYNAMIC
-
-    PA_DEBUG(( "%s: loading ALSA library file - %s\n", __FUNCTION__, g_AlsaLibName ));
-
-    dlerror();
-    g_AlsaLib = dlopen(g_AlsaLibName, (RTLD_NOW|RTLD_GLOBAL) );
-    if (g_AlsaLib == NULL)
-    {
-        PA_DEBUG(( "%s: failed dlopen() ALSA library file - %s, error: %s\n", __FUNCTION__, g_AlsaLibName, dlerror() ));
-        return 0;
-    }
-
-    PA_DEBUG(( "%s: loading ALSA API\n", __FUNCTION__ ));
-
-    #define _PA_LOAD_FUNC(x) do {             \
-        alsa_##x = dlsym( g_AlsaLib, #x );      \
-        if( alsa_##x == NULL ) {               \
-            PA_DEBUG(( "%s: symbol [%s] not found in - %s, error: %s\n", __FUNCTION__, #x, g_AlsaLibName, dlerror() )); }\
-        } while(0)
-
-#else
-
-    #define _PA_LOAD_FUNC(x) alsa_##x = &x
-
-#endif
-
-    _PA_LOAD_FUNC(snd_pcm_open);
-    _PA_LOAD_FUNC(snd_pcm_close);
-    _PA_LOAD_FUNC(snd_pcm_nonblock);
-    _PA_LOAD_FUNC(snd_pcm_frames_to_bytes);
-    _PA_LOAD_FUNC(snd_pcm_prepare);
-    _PA_LOAD_FUNC(snd_pcm_start);
-    _PA_LOAD_FUNC(snd_pcm_resume);
-    _PA_LOAD_FUNC(snd_pcm_wait);
-    _PA_LOAD_FUNC(snd_pcm_state);
-    _PA_LOAD_FUNC(snd_pcm_avail_update);
-    _PA_LOAD_FUNC(snd_pcm_areas_silence);
-    _PA_LOAD_FUNC(snd_pcm_mmap_begin);
-    _PA_LOAD_FUNC(snd_pcm_mmap_commit);
-    _PA_LOAD_FUNC(snd_pcm_readi);
-    _PA_LOAD_FUNC(snd_pcm_readn);
-    _PA_LOAD_FUNC(snd_pcm_writei);
-    _PA_LOAD_FUNC(snd_pcm_writen);
-    _PA_LOAD_FUNC(snd_pcm_drain);
-    _PA_LOAD_FUNC(snd_pcm_recover);
-    _PA_LOAD_FUNC(snd_pcm_drop);
-    _PA_LOAD_FUNC(snd_pcm_area_copy);
-    _PA_LOAD_FUNC(snd_pcm_poll_descriptors);
-    _PA_LOAD_FUNC(snd_pcm_poll_descriptors_count);
-    _PA_LOAD_FUNC(snd_pcm_poll_descriptors_revents);
-    _PA_LOAD_FUNC(snd_pcm_format_size);
-    _PA_LOAD_FUNC(snd_pcm_link);
-    _PA_LOAD_FUNC(snd_pcm_delay);
-
-    _PA_LOAD_FUNC(snd_pcm_hw_params_sizeof);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_malloc);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_free);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_any);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_access);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_format);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_channels);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_set_periods_near);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_rate_near);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_rate);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_rate_resample);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_set_buffer_time_near);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_buffer_size);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_buffer_size_near);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_buffer_size_min);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_set_period_time_near);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_period_size_near);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_periods_integer);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_periods_min);
-
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_buffer_size);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_get_period_size);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_get_access);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_get_periods);
-//    _PA_LOAD_FUNC(snd_pcm_hw_params_get_rate);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_channels_min);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_channels_max);
-
-    _PA_LOAD_FUNC(snd_pcm_hw_params_test_period_size);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_test_format);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_test_access);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_dump);
-    _PA_LOAD_FUNC(snd_pcm_hw_params);
-
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_periods_min);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_periods_max);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_set_period_size);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_period_size_min);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_period_size_max);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_buffer_size_max);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_rate_min);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_rate_max);
-    _PA_LOAD_FUNC(snd_pcm_hw_params_get_rate_numden);
-
-    _PA_LOAD_FUNC(snd_pcm_sw_params_sizeof);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_malloc);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_current);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_avail_min);
-    _PA_LOAD_FUNC(snd_pcm_sw_params);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_free);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_start_threshold);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_stop_threshold);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_get_boundary);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_silence_threshold);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_silence_size);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_xfer_align);
-    _PA_LOAD_FUNC(snd_pcm_sw_params_set_tstamp_mode);
-
-    _PA_LOAD_FUNC(snd_pcm_info);
-    _PA_LOAD_FUNC(snd_pcm_info_sizeof);
-    _PA_LOAD_FUNC(snd_pcm_info_malloc);
-    _PA_LOAD_FUNC(snd_pcm_info_free);
-    _PA_LOAD_FUNC(snd_pcm_info_set_device);
-    _PA_LOAD_FUNC(snd_pcm_info_set_subdevice);
-    _PA_LOAD_FUNC(snd_pcm_info_set_stream);
-    _PA_LOAD_FUNC(snd_pcm_info_get_name);
-    _PA_LOAD_FUNC(snd_pcm_info_get_card);
-
-    _PA_LOAD_FUNC(snd_ctl_pcm_next_device);
-    _PA_LOAD_FUNC(snd_ctl_pcm_info);
-    _PA_LOAD_FUNC(snd_ctl_open);
-    _PA_LOAD_FUNC(snd_ctl_close);
-    _PA_LOAD_FUNC(snd_ctl_card_info_malloc);
-    _PA_LOAD_FUNC(snd_ctl_card_info_free);
-    _PA_LOAD_FUNC(snd_ctl_card_info);
-    _PA_LOAD_FUNC(snd_ctl_card_info_sizeof);
-    _PA_LOAD_FUNC(snd_ctl_card_info_get_name);
-
-    _PA_LOAD_FUNC(snd_config);
-    _PA_LOAD_FUNC(snd_config_update);
-    _PA_LOAD_FUNC(snd_config_search);
-    _PA_LOAD_FUNC(snd_config_iterator_entry);
-    _PA_LOAD_FUNC(snd_config_iterator_first);
-    _PA_LOAD_FUNC(snd_config_iterator_end);
-    _PA_LOAD_FUNC(snd_config_iterator_next);
-    _PA_LOAD_FUNC(snd_config_get_string);
-    _PA_LOAD_FUNC(snd_config_get_id);
-    _PA_LOAD_FUNC(snd_config_update_free_global);
-
-    _PA_LOAD_FUNC(snd_pcm_status);
-    _PA_LOAD_FUNC(snd_pcm_status_sizeof);
-    _PA_LOAD_FUNC(snd_pcm_status_get_tstamp);
-    _PA_LOAD_FUNC(snd_pcm_status_get_state);
-    _PA_LOAD_FUNC(snd_pcm_status_get_trigger_tstamp);
-    _PA_LOAD_FUNC(snd_pcm_status_get_delay);
-
-    _PA_LOAD_FUNC(snd_card_next);
-    _PA_LOAD_FUNC(snd_asoundlib_version);
-    _PA_LOAD_FUNC(snd_strerror);
-    _PA_LOAD_FUNC(snd_output_stdio_attach);
-#undef _PA_LOAD_FUNC
-
-#ifdef PA_ALSA_DYNAMIC
-    PA_DEBUG(( "%s: loaded ALSA API - ok\n", __FUNCTION__ ));
-
-#define _PA_VALIDATE_LOAD_REPLACEMENT(x)\
-    do {\
-        if( alsa_##x == NULL )\
-        {\
-            alsa_##x = &_PA_LOCAL_IMPL(x);\
-            PA_DEBUG(( "%s: replacing [%s] with local implementation\n", __FUNCTION__, #x ));\
-        }\
-    } while (0)
-
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_set_rate_near);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_set_buffer_size_near);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_set_period_size_near);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_channels_min);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_channels_max);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_periods_min);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_periods_max);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_period_size_min);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_period_size_max);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_buffer_size_max);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_rate_min);
-    _PA_VALIDATE_LOAD_REPLACEMENT(snd_pcm_hw_params_get_rate_max);
-
-#undef _PA_LOCAL_IMPL
-#undef _PA_VALIDATE_LOAD_REPLACEMENT
-
-#endif // PA_ALSA_DYNAMIC
-
-    return 1;
-}
-
-void PaAlsa_SetLibraryPathName( const char *pathName )
-{
-#ifdef PA_ALSA_DYNAMIC
-    g_AlsaLibName = pathName;
-#else
-    (void)pathName;
-#endif
-}
-
-/* Close handle to Alsa library. */
-static void PaAlsa_CloseLibrary()
-{
-#ifdef PA_ALSA_DYNAMIC
-    dlclose(g_AlsaLib);
-    g_AlsaLib = NULL;
-#endif
-}
-
-/* Check return value of ALSA function, and map it to PaError */
-#define ENSURE_(expr, code) \
-    do { \
-        int __pa_unsure_error_id;\
-        if( UNLIKELY( (__pa_unsure_error_id = (expr)) < 0 ) ) \
-        { \
-            /* PaUtil_SetLastHostErrorInfo should only be used in the main thread */ \
-            if( (code) == paUnanticipatedHostError && pthread_equal( pthread_self(), paUnixMainThread) ) \
-            { \
-                PaUtil_SetLastHostErrorInfo( paALSA, __pa_unsure_error_id, alsa_snd_strerror( __pa_unsure_error_id ) ); \
-            } \
-            PaUtil_DebugPrint( "Expression '" #expr "' failed in '" __FILE__ "', line: " STRINGIZE( __LINE__ ) "\n" ); \
-            if( (code) == paUnanticipatedHostError ) \
-                PA_DEBUG(( "Host error description: %s\n", alsa_snd_strerror( __pa_unsure_error_id ) )); \
-            result = (code); \
-            goto error; \
-        } \
-    } while (0)
-
-#define ASSERT_CALL_(expr, success) \
-    do {\
-        int __pa_assert_error_id;\
-        __pa_assert_error_id = (expr);\
-        assert( success == __pa_assert_error_id );\
-    } while (0)
-
-static int numPeriods_ = 4;
-static int busyRetries_ = 100;
-
-int PaAlsa_SetNumPeriods( int numPeriods )
-{
-    numPeriods_ = numPeriods;
-    return paNoError;
-}
-
-typedef enum
-{
-    StreamDirection_In,
-    StreamDirection_Out
-} StreamDirection;
 
 typedef struct
 {
@@ -622,6 +115,7 @@ typedef struct
 
     snd_pcm_channel_area_t *channelAreas;  /* Needed for channel adaption */
 } PaAlsaStreamComponent;
+
 
 /* Implementation specific stream structure */
 typedef struct PaAlsaStream
@@ -658,30 +152,10 @@ typedef struct PaAlsaStream
 }
 PaAlsaStream;
 
-/* PaAlsaHostApiRepresentation - host api datastructure specific to this implementation */
 
-typedef struct PaAlsaHostApiRepresentation
-{
-    PaUtilHostApiRepresentation baseHostApiRep;
-    PaUtilStreamInterface callbackStreamInterface;
-    PaUtilStreamInterface blockingStreamInterface;
+static int numPeriods_ = 4;
+static int busyRetries_ = 100;
 
-    PaUtilAllocationGroup *allocations;
-
-    PaHostApiIndex hostApiIndex;
-    PaUint32 alsaLibVersion; /* Retrieved from the library at run-time */
-}
-PaAlsaHostApiRepresentation;
-
-typedef struct PaAlsaDeviceInfo
-{
-    PaDeviceInfo baseDeviceInfo;
-    char *alsaName;
-    int isPlug;
-    int minInputChannels;
-    int minOutputChannels;
-}
-PaAlsaDeviceInfo;
 
 /* prototypes for functions declared in this file */
 
@@ -707,9 +181,6 @@ static PaError IsStreamStopped( PaStream *s );
 static PaError IsStreamActive( PaStream *stream );
 static PaTime GetStreamTime( PaStream *stream );
 static double GetStreamCpuLoad( PaStream* stream );
-static PaError BuildDeviceList( PaAlsaHostApiRepresentation *hostApi );
-static int SetApproximateSampleRate( snd_pcm_t *pcm, snd_pcm_hw_params_t *hwParams, double sampleRate );
-static int GetExactSampleRate( snd_pcm_hw_params_t *hwParams, double *sampleRate );
 static PaUint32 PaAlsaVersionNum(void);
 
 /* Callback prototypes */
@@ -722,10 +193,12 @@ static PaError ReadStream( PaStream* stream, void *buffer, unsigned long frames 
 static PaError WriteStream( PaStream* stream, const void *buffer, unsigned long frames );
 
 
+
 static const PaAlsaDeviceInfo *GetDeviceInfo( const PaUtilHostApiRepresentation *hostApi, int device )
 {
     return (const PaAlsaDeviceInfo *)hostApi->deviceInfos[device];
 }
+
 
 /** Uncommented because AlsaErrorHandler is unused for anything good yet. If AlsaErrorHandler is
     to be used, do not forget to register this callback in PaAlsa_Initialize, and unregister in Terminate.
@@ -740,7 +213,7 @@ PaError PaAlsa_Initialize( PaUtilHostApiRepresentation **hostApi, PaHostApiIndex
     PaAlsaHostApiRepresentation *alsaHostApi = NULL;
 
     /* Try loading Alsa library. */
-    if (!PaAlsa_LoadLibrary())
+    if (!AlsaLoad_OpenLibrary())
         return paHostApiNotFound;
 
     PA_UNLESS( alsaHostApi = (PaAlsaHostApiRepresentation*) PaUtil_AllocateMemory(
@@ -763,7 +236,7 @@ PaError PaAlsa_Initialize( PaUtilHostApiRepresentation **hostApi, PaHostApiIndex
     */
     /*ENSURE_( snd_lib_error_set_handler(AlsaErrorHandler), paUnanticipatedHostError );*/
 
-    PA_ENSURE( BuildDeviceList( alsaHostApi ) );
+    PA_ENSURE( AlsaDevs_BuildList( alsaHostApi ) );
 
     PaUtil_InitializeStreamInterface( &alsaHostApi->callbackStreamInterface,
                                       CloseStream, StartStream,
@@ -802,6 +275,7 @@ error:
     return result;
 }
 
+
 static void Terminate( struct PaUtilHostApiRepresentation *hostApi )
 {
     PaAlsaHostApiRepresentation *alsaHostApi = (PaAlsaHostApiRepresentation*)hostApi;
@@ -822,143 +296,7 @@ static void Terminate( struct PaUtilHostApiRepresentation *hostApi )
     alsa_snd_config_update_free_global();
 
     /* Close Alsa library. */
-    PaAlsa_CloseLibrary();
-}
-
-/** Determine max channels and default latencies.
- *
- * This function provides functionality to grope an opened (might be opened for capture or playback) pcm device for
- * traits like max channels, suitable default latencies and default sample rate. Upon error, max channels is set to zero,
- * and a suitable result returned. The device is closed before returning.
- */
-static PaError GropeDevice( snd_pcm_t* pcm, int isPlug, StreamDirection mode, int openBlocking,
-        PaAlsaDeviceInfo* devInfo )
-{
-    PaError result = paNoError;
-    snd_pcm_hw_params_t *hwParams;
-    snd_pcm_uframes_t alsaBufferFrames, alsaPeriodFrames;
-    unsigned int minChans, maxChans;
-    int* minChannels, * maxChannels;
-    double * defaultLowLatency, * defaultHighLatency, * defaultSampleRate =
-        &devInfo->baseDeviceInfo.defaultSampleRate;
-    double defaultSr = *defaultSampleRate;
-    int dir;
-
-    assert( pcm );
-
-    PA_DEBUG(( "%s: collecting info ..\n", __FUNCTION__ ));
-
-    if( StreamDirection_In == mode )
-    {
-        minChannels = &devInfo->minInputChannels;
-        maxChannels = &devInfo->baseDeviceInfo.maxInputChannels;
-        defaultLowLatency = &devInfo->baseDeviceInfo.defaultLowInputLatency;
-        defaultHighLatency = &devInfo->baseDeviceInfo.defaultHighInputLatency;
-    }
-    else
-    {
-        minChannels = &devInfo->minOutputChannels;
-        maxChannels = &devInfo->baseDeviceInfo.maxOutputChannels;
-        defaultLowLatency = &devInfo->baseDeviceInfo.defaultLowOutputLatency;
-        defaultHighLatency = &devInfo->baseDeviceInfo.defaultHighOutputLatency;
-    }
-
-    ENSURE_( alsa_snd_pcm_nonblock( pcm, 0 ), paUnanticipatedHostError );
-
-    alsa_snd_pcm_hw_params_alloca( &hwParams );
-    alsa_snd_pcm_hw_params_any( pcm, hwParams );
-
-    if( defaultSr >= 0 )
-    {
-        /* Could be that the device opened in one mode supports samplerates that the other mode wont have,
-         * so try again .. */
-        if( SetApproximateSampleRate( pcm, hwParams, defaultSr ) < 0 )
-        {
-            defaultSr = -1.;
-            alsa_snd_pcm_hw_params_any( pcm, hwParams ); /* Clear any params (rate) that might have been set */
-            PA_DEBUG(( "%s: Original default samplerate failed, trying again ..\n", __FUNCTION__ ));
-        }
-    }
-
-    if( defaultSr < 0. )           /* Default sample rate not set */
-    {
-        unsigned int sampleRate = 44100;        /* Will contain approximate rate returned by alsa-lib */
-
-        /* Don't allow rate resampling when probing for the default rate (but ignore if this call fails) */
-        alsa_snd_pcm_hw_params_set_rate_resample( pcm, hwParams, 0 );
-        if( alsa_snd_pcm_hw_params_set_rate_near( pcm, hwParams, &sampleRate, NULL ) < 0 )
-        {
-            result = paUnanticipatedHostError;
-            goto error;
-        }
-        ENSURE_( GetExactSampleRate( hwParams, &defaultSr ), paUnanticipatedHostError );
-    }
-
-    ENSURE_( alsa_snd_pcm_hw_params_get_channels_min( hwParams, &minChans ), paUnanticipatedHostError );
-    ENSURE_( alsa_snd_pcm_hw_params_get_channels_max( hwParams, &maxChans ), paUnanticipatedHostError );
-    assert( maxChans <= INT_MAX );
-    assert( maxChans > 0 );    /* Weird linking issue could cause wrong version of ALSA symbols to be called,
-                                   resulting in zeroed values */
-
-    /* XXX: Limit to sensible number (ALSA plugins accept a crazy amount of channels)? */
-    if( isPlug && maxChans > 128 )
-    {
-        maxChans = 128;
-        PA_DEBUG(( "%s: Limiting number of plugin channels to %u\n", __FUNCTION__, maxChans ));
-    }
-
-    /* TWEAKME:
-     * Giving values for default min and max latency is not straightforward.
-     *  * for low latency, we want to give the lowest value that will work reliably.
-     *      This varies based on the sound card, kernel, CPU, etc.  Better to give
-     *      sub-optimal latency than to give a number too low and cause dropouts.
-     *  * for high latency we want to give a large enough value that dropouts are basically impossible.
-     *      This doesn't really require as much tweaking, since providing too large a number will
-     *      just cause us to select the nearest setting that will work at stream config time.
-     */
-    /* Try low latency values, (sometimes the buffer & period that result are larger) */
-    alsaBufferFrames = 512;
-    alsaPeriodFrames = 128;
-    ENSURE_( alsa_snd_pcm_hw_params_set_buffer_size_near( pcm, hwParams, &alsaBufferFrames ), paUnanticipatedHostError );
-    ENSURE_( alsa_snd_pcm_hw_params_set_period_size_near( pcm, hwParams, &alsaPeriodFrames, &dir ), paUnanticipatedHostError );
-    *defaultLowLatency = (double) (alsaBufferFrames - alsaPeriodFrames) / defaultSr;
-
-    /* Base the high latency case on values four times larger */
-    alsaBufferFrames = 2048;
-    alsaPeriodFrames = 512;
-    /* Have to reset hwParams, to set new buffer size; need to also set sample rate again */
-    ENSURE_( alsa_snd_pcm_hw_params_any( pcm, hwParams ), paUnanticipatedHostError );
-    ENSURE_( SetApproximateSampleRate( pcm, hwParams, defaultSr ), paUnanticipatedHostError );
-    ENSURE_( alsa_snd_pcm_hw_params_set_buffer_size_near( pcm, hwParams, &alsaBufferFrames ), paUnanticipatedHostError );
-    ENSURE_( alsa_snd_pcm_hw_params_set_period_size_near( pcm, hwParams, &alsaPeriodFrames, &dir ), paUnanticipatedHostError );
-    *defaultHighLatency = (double) (alsaBufferFrames - alsaPeriodFrames) / defaultSr;
-
-    *minChannels = (int)minChans;
-    *maxChannels = (int)maxChans;
-    *defaultSampleRate = defaultSr;
-
-end:
-    alsa_snd_pcm_close( pcm );
-    return result;
-
-error:
-    goto end;
-}
-
-/* Initialize device info with invalid values (maxInputChannels and maxOutputChannels are set to zero since these indicate
- * whether input/output is available) */
-static void InitializeDeviceInfo( PaDeviceInfo *deviceInfo )
-{
-    deviceInfo->structVersion = -1;
-    deviceInfo->name = NULL;
-    deviceInfo->hostApi = -1;
-    deviceInfo->maxInputChannels = 0;
-    deviceInfo->maxOutputChannels = 0;
-    deviceInfo->defaultLowInputLatency = -1.;
-    deviceInfo->defaultLowOutputLatency = -1.;
-    deviceInfo->defaultHighInputLatency = -1.;
-    deviceInfo->defaultHighOutputLatency = -1.;
-    deviceInfo->defaultSampleRate = -1.;
+    AlsaLoad_CloseLibrary();
 }
 
 
@@ -979,137 +317,6 @@ static PaUint32 PaAlsaVersionNum(void)
 }
 
 
-/* Helper struct */
-typedef struct
-{
-    char *alsaName;
-    char *name;
-    int isPlug;
-    int hasPlayback;
-    int hasCapture;
-} HwDevInfo;
-
-
-HwDevInfo predefinedNames[] = {
-    { "center_lfe", NULL, 0, 1, 0 },
-/* { "default", NULL, 0, 1, 1 }, */
-    { "dmix", NULL, 0, 1, 0 },
-/* { "dpl", NULL, 0, 1, 0 }, */
-/* { "dsnoop", NULL, 0, 0, 1 }, */
-    { "front", NULL, 0, 1, 0 },
-    { "iec958", NULL, 0, 1, 0 },
-/* { "modem", NULL, 0, 1, 0 }, */
-    { "rear", NULL, 0, 1, 0 },
-    { "side", NULL, 0, 1, 0 },
-/*     { "spdif", NULL, 0, 0, 0 }, */
-    { "surround40", NULL, 0, 1, 0 },
-    { "surround41", NULL, 0, 1, 0 },
-    { "surround50", NULL, 0, 1, 0 },
-    { "surround51", NULL, 0, 1, 0 },
-    { "surround71", NULL, 0, 1, 0 },
-
-    { "AndroidPlayback_Earpiece_normal",         NULL, 0, 1, 0 },
-    { "AndroidPlayback_Speaker_normal",          NULL, 0, 1, 0 },
-    { "AndroidPlayback_Bluetooth_normal",        NULL, 0, 1, 0 },
-    { "AndroidPlayback_Headset_normal",          NULL, 0, 1, 0 },
-    { "AndroidPlayback_Speaker_Headset_normal",  NULL, 0, 1, 0 },
-    { "AndroidPlayback_Bluetooth-A2DP_normal",   NULL, 0, 1, 0 },
-    { "AndroidPlayback_ExtraDockSpeaker_normal", NULL, 0, 1, 0 },
-    { "AndroidPlayback_TvOut_normal",            NULL, 0, 1, 0 },
-
-    { "AndroidRecord_Microphone",                NULL, 0, 0, 1 },
-    { "AndroidRecord_Earpiece_normal",           NULL, 0, 0, 1 },
-    { "AndroidRecord_Speaker_normal",            NULL, 0, 0, 1 },
-    { "AndroidRecord_Headset_normal",            NULL, 0, 0, 1 },
-    { "AndroidRecord_Bluetooth_normal",          NULL, 0, 0, 1 },
-    { "AndroidRecord_Speaker_Headset_normal",    NULL, 0, 0, 1 },
-
-    { NULL, NULL, 0, 1, 0 }
-};
-
-static const HwDevInfo *FindDeviceName( const char *name )
-{
-    int i;
-
-    for( i = 0; predefinedNames[i].alsaName; i++ )
-    {
-        if( strcmp( name, predefinedNames[i].alsaName ) == 0 )
-        {
-            return &predefinedNames[i];
-        }
-    }
-
-    return NULL;
-}
-
-static PaError PaAlsa_StrDup( PaAlsaHostApiRepresentation *alsaApi,
-        char **dst,
-        const char *src)
-{
-    PaError result = paNoError;
-    int len = strlen( src ) + 1;
-
-    /* PA_DEBUG(("PaStrDup %s %d\n", src, len)); */
-
-    PA_UNLESS( *dst = (char *)PaUtil_GroupAllocateMemory( alsaApi->allocations, len ),
-            paInsufficientMemory );
-    strncpy( *dst, src, len );
-
-error:
-    return result;
-}
-
-/* Disregard some standard plugins
- */
-static int IgnorePlugin( const char *pluginId )
-{
-    static const char *ignoredPlugins[] = {"hw", "plughw", "plug", "dsnoop", "tee",
-        "file", "null", "shm", "cards", "rate_convert", NULL};
-    int i = 0;
-    while( ignoredPlugins[i] )
-    {
-        if( !strcmp( pluginId, ignoredPlugins[i] ) )
-        {
-            return 1;
-        }
-        ++i;
-    }
-
-    return 0;
-}
-
-/* Skip past parts at the beginning of a (pcm) info name that are already in the card name, to avoid duplication */
-static char *SkipCardDetailsInName( char *infoSkipName, char *cardRefName )
-{
-    char *lastSpacePosn = infoSkipName;
-
-    /* Skip matching chars; but only in chunks separated by ' ' (not part words etc), so track lastSpacePosn */
-    while( *cardRefName )
-    {
-        while( *infoSkipName && *cardRefName && *infoSkipName == *cardRefName)
-        {
-            infoSkipName++;
-            cardRefName++;
-            if( *infoSkipName == ' ' || *infoSkipName == '\0' )
-                lastSpacePosn = infoSkipName;
-        }
-        infoSkipName = lastSpacePosn;
-        /* Look for another chunk; post-increment means ends pointing to next char */
-        while( *cardRefName && ( *cardRefName++ != ' ' ));
-    }
-    if( *infoSkipName == '\0' )
-        return "-"; /* The 2 names were identical; instead of a nul-string, return a marker string */
-
-    /* Now want to move to the first char after any spaces */
-    while( *lastSpacePosn && *lastSpacePosn == ' ' )
-        lastSpacePosn++;
-    /* Skip a single separator char if present in the remaining pcm name; (pa will add its own) */
-    if(( *lastSpacePosn == '-' || *lastSpacePosn == ':' ) && *(lastSpacePosn + 1) == ' ' )
-        lastSpacePosn += 2;
-
-    return lastSpacePosn;
-}
-
 /** Open PCM device.
  *
  * Wrapper around alsa_snd_pcm_open which may repeatedly retry opening a device if it is busy, for
@@ -1118,7 +325,7 @@ static char *SkipCardDetailsInName( char *infoSkipName, char *cardRefName )
  * @param mode: Open mode (e.g., SND_PCM_BLOCKING).
  * @param waitOnBusy: Retry opening busy device for up to one second?
  **/
-static int OpenPcm( snd_pcm_t **pcmp, const char *name, snd_pcm_stream_t stream, int mode, int waitOnBusy )
+int Alsa_OpenPcm( snd_pcm_t **pcmp, const char *name, snd_pcm_stream_t stream, int mode, int waitOnBusy )
 {
     int ret, tries = 0, maxTries = waitOnBusy ? busyRetries_ : 0;
 
@@ -1146,338 +353,6 @@ static int OpenPcm( snd_pcm_t **pcmp, const char *name, snd_pcm_stream_t stream,
     return ret;
 }
 
-static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, HwDevInfo* deviceHwInfo, int blocking,
-        PaAlsaDeviceInfo* devInfo, int* devIdx )
-{
-    PaError result = 0;
-    PaDeviceInfo *baseDeviceInfo = &devInfo->baseDeviceInfo;
-    snd_pcm_t *pcm = NULL;
-    PaUtilHostApiRepresentation *baseApi = &alsaApi->baseHostApiRep;
-
-    PA_DEBUG(( "%s: Filling device info for: %s\n", __FUNCTION__, deviceHwInfo->name ));
-
-    /* Zero fields */
-    InitializeDeviceInfo( baseDeviceInfo );
-
-    /* To determine device capabilities, we must open the device and query the
-     * hardware parameter configuration space */
-
-    /* Query capture */
-    if( deviceHwInfo->hasCapture &&
-        OpenPcm( &pcm, deviceHwInfo->alsaName, SND_PCM_STREAM_CAPTURE, blocking, 0 ) >= 0 )
-    {
-        if( GropeDevice( pcm, deviceHwInfo->isPlug, StreamDirection_In, blocking, devInfo ) != paNoError )
-        {
-            /* Error */
-            PA_DEBUG(( "%s: Failed groping %s for capture\n", __FUNCTION__, deviceHwInfo->alsaName ));
-            goto end;
-        }
-    }
-
-    /* Query playback */
-    if( deviceHwInfo->hasPlayback &&
-        OpenPcm( &pcm, deviceHwInfo->alsaName, SND_PCM_STREAM_PLAYBACK, blocking, 0 ) >= 0 )
-    {
-        if( GropeDevice( pcm, deviceHwInfo->isPlug, StreamDirection_Out, blocking, devInfo ) != paNoError )
-        {
-            /* Error */
-            PA_DEBUG(( "%s: Failed groping %s for playback\n", __FUNCTION__, deviceHwInfo->alsaName ));
-            goto end;
-        }
-    }
-
-    baseDeviceInfo->structVersion = 2;
-    baseDeviceInfo->hostApi = alsaApi->hostApiIndex;
-    baseDeviceInfo->name = deviceHwInfo->name;
-    devInfo->alsaName = deviceHwInfo->alsaName;
-    devInfo->isPlug = deviceHwInfo->isPlug;
-
-    /* A: Storing pointer to PaAlsaDeviceInfo object as pointer to PaDeviceInfo object.
-     * Should now be safe to add device info, unless the device supports neither capture nor playback
-     */
-    if( baseDeviceInfo->maxInputChannels > 0 || baseDeviceInfo->maxOutputChannels > 0 )
-    {
-        /* Make device default if there isn't already one or it is the ALSA "default" device */
-        if( ( baseApi->info.defaultInputDevice == paNoDevice ||
-            !strcmp( deviceHwInfo->alsaName, "default" ) ) && baseDeviceInfo->maxInputChannels > 0 )
-        {
-            baseApi->info.defaultInputDevice = *devIdx;
-            PA_DEBUG(( "Default input device: %s\n", deviceHwInfo->name ));
-        }
-        if( ( baseApi->info.defaultOutputDevice == paNoDevice ||
-            !strcmp( deviceHwInfo->alsaName, "default" ) ) && baseDeviceInfo->maxOutputChannels > 0 )
-        {
-            baseApi->info.defaultOutputDevice = *devIdx;
-            PA_DEBUG(( "Default output device: %s\n", deviceHwInfo->name ));
-        }
-        PA_DEBUG(( "%s: Adding device %s: %d\n", __FUNCTION__, deviceHwInfo->name, *devIdx ));
-        baseApi->deviceInfos[*devIdx] = (PaDeviceInfo *) devInfo;
-        (*devIdx) += 1;
-    }
-    else
-    {
-        PA_DEBUG(( "%s: Skipped device: %s, all channels == 0\n", __FUNCTION__, deviceHwInfo->name ));
-    }
-
-end:
-    return result;
-}
-
-/* Build PaDeviceInfo list, ignore devices for which we cannot determine capabilities (possibly busy, sigh) */
-static PaError BuildDeviceList( PaAlsaHostApiRepresentation *alsaApi )
-{
-    PaUtilHostApiRepresentation *baseApi = &alsaApi->baseHostApiRep;
-    PaAlsaDeviceInfo *deviceInfoArray;
-    int cardIdx = -1, devIdx = 0;
-    snd_ctl_card_info_t *cardInfo;
-    PaError result = paNoError;
-    size_t numDeviceNames = 0, maxDeviceNames = 1, i;
-    HwDevInfo *hwDevInfos = NULL;
-    snd_config_t *topNode = NULL;
-    snd_pcm_info_t *pcmInfo;
-    int res;
-    int blocking = SND_PCM_NONBLOCK;
-    int usePlughw = 0;
-    char *hwPrefix = "";
-    char alsaCardName[50];
-#ifdef PA_ENABLE_DEBUG_OUTPUT
-    PaTime startTime = PaUtil_GetTime();
-#endif
-
-    if( getenv( "PA_ALSA_INITIALIZE_BLOCK" ) && atoi( getenv( "PA_ALSA_INITIALIZE_BLOCK" ) ) )
-        blocking = 0;
-
-    /* If PA_ALSA_PLUGHW is 1 (non-zero), use the plughw: pcm throughout instead of hw: */
-    if( getenv( "PA_ALSA_PLUGHW" ) && atoi( getenv( "PA_ALSA_PLUGHW" ) ) )
-    {
-        usePlughw = 1;
-        hwPrefix = "plug";
-        PA_DEBUG(( "%s: Using Plughw\n", __FUNCTION__ ));
-    }
-
-    /* These two will be set to the first working input and output device, respectively */
-    baseApi->info.defaultInputDevice = paNoDevice;
-    baseApi->info.defaultOutputDevice = paNoDevice;
-
-    /* Gather info about hw devices
-
-     * alsa_snd_card_next() modifies the integer passed to it to be:
-     *      the index of the first card if the parameter is -1
-     *      the index of the next card if the parameter is the index of a card
-     *      -1 if there are no more cards
-     *
-     * The function itself returns 0 if it succeeded. */
-    cardIdx = -1;
-    alsa_snd_ctl_card_info_alloca( &cardInfo );
-    alsa_snd_pcm_info_alloca( &pcmInfo );
-    while( alsa_snd_card_next( &cardIdx ) == 0 && cardIdx >= 0 )
-    {
-        char *cardName;
-        int devIdx = -1;
-        snd_ctl_t *ctl;
-        char buf[50];
-
-        snprintf( alsaCardName, sizeof (alsaCardName), "hw:%d", cardIdx );
-
-        /* Acquire name of card */
-        if( alsa_snd_ctl_open( &ctl, alsaCardName, 0 ) < 0 )
-        {
-            /* Unable to open card :( */
-            PA_DEBUG(( "%s: Unable to open device %s\n", __FUNCTION__, alsaCardName ));
-            continue;
-        }
-        alsa_snd_ctl_card_info( ctl, cardInfo );
-
-        PA_ENSURE( PaAlsa_StrDup( alsaApi, &cardName, alsa_snd_ctl_card_info_get_name( cardInfo )) );
-
-        while( alsa_snd_ctl_pcm_next_device( ctl, &devIdx ) == 0 && devIdx >= 0 )
-        {
-            char *alsaDeviceName, *deviceName, *infoName;
-            size_t len;
-            int hasPlayback = 0, hasCapture = 0;
-
-            snprintf( buf, sizeof (buf), "%s%s,%d", hwPrefix, alsaCardName, devIdx );
-
-            /* Obtain info about this particular device */
-            alsa_snd_pcm_info_set_device( pcmInfo, devIdx );
-            alsa_snd_pcm_info_set_subdevice( pcmInfo, 0 );
-            alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_CAPTURE );
-            if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
-            {
-                hasCapture = 1;
-            }
-
-            alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_PLAYBACK );
-            if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
-            {
-                hasPlayback = 1;
-            }
-
-            if( !hasPlayback && !hasCapture )
-            {
-                /* Error */
-                continue;
-            }
-
-            infoName = SkipCardDetailsInName( (char *)alsa_snd_pcm_info_get_name( pcmInfo ), cardName );
-
-            /* The length of the string written by snprintf plus terminating 0 */
-            len = snprintf( NULL, 0, "%s: %s (%s)", cardName, infoName, buf ) + 1;
-            PA_UNLESS( deviceName = (char *)PaUtil_GroupAllocateMemory( alsaApi->allocations, len ),
-                    paInsufficientMemory );
-            snprintf( deviceName, len, "%s: %s (%s)", cardName, infoName, buf );
-
-            ++numDeviceNames;
-            if( !hwDevInfos || numDeviceNames > maxDeviceNames )
-            {
-                maxDeviceNames *= 2;
-                PA_UNLESS( hwDevInfos = (HwDevInfo *) realloc( hwDevInfos, maxDeviceNames * sizeof (HwDevInfo) ),
-                        paInsufficientMemory );
-            }
-
-            PA_ENSURE( PaAlsa_StrDup( alsaApi, &alsaDeviceName, buf ) );
-
-            hwDevInfos[ numDeviceNames - 1 ].alsaName = alsaDeviceName;
-            hwDevInfos[ numDeviceNames - 1 ].name = deviceName;
-            hwDevInfos[ numDeviceNames - 1 ].isPlug = usePlughw;
-            hwDevInfos[ numDeviceNames - 1 ].hasPlayback = hasPlayback;
-            hwDevInfos[ numDeviceNames - 1 ].hasCapture = hasCapture;
-        }
-        alsa_snd_ctl_close( ctl );
-    }
-
-    /* Iterate over plugin devices */
-    if( NULL == (*alsa_snd_config) )
-    {
-        /* alsa_snd_config_update is called implicitly by some functions, if this hasn't happened snd_config will be NULL (bleh) */
-        ENSURE_( alsa_snd_config_update(), paUnanticipatedHostError );
-        PA_DEBUG(( "Updating snd_config\n" ));
-    }
-    assert( *alsa_snd_config );
-    if( ( res = alsa_snd_config_search( *alsa_snd_config, "pcm", &topNode ) ) >= 0 )
-    {
-        snd_config_iterator_t i, next;
-
-        alsa_snd_config_for_each( i, next, topNode )
-        {
-            const char *tpStr = "unknown", *idStr = NULL;
-            int err = 0;
-
-            char *alsaDeviceName, *deviceName;
-            const HwDevInfo *predefined = NULL;
-            snd_config_t *n = alsa_snd_config_iterator_entry( i ), * tp = NULL;;
-
-            if( (err = alsa_snd_config_search( n, "type", &tp )) < 0 )
-            {
-                if( -ENOENT != err )
-                {
-                    ENSURE_(err, paUnanticipatedHostError);
-                }
-            }
-            else
-            {
-                ENSURE_( alsa_snd_config_get_string( tp, &tpStr ), paUnanticipatedHostError );
-            }
-            ENSURE_( alsa_snd_config_get_id( n, &idStr ), paUnanticipatedHostError );
-            if( IgnorePlugin( idStr ) )
-            {
-                PA_DEBUG(( "%s: Ignoring ALSA plugin device [%s] of type [%s]\n", __FUNCTION__, idStr, tpStr ));
-                continue;
-            }
-            PA_DEBUG(( "%s: Found plugin [%s] of type [%s]\n", __FUNCTION__, idStr, tpStr ));
-
-            PA_UNLESS( alsaDeviceName = (char*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
-                                                            strlen(idStr) + 6 ), paInsufficientMemory );
-            strcpy( alsaDeviceName, idStr );
-            PA_UNLESS( deviceName = (char*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
-                                                            strlen(idStr) + 1 ), paInsufficientMemory );
-            strcpy( deviceName, idStr );
-
-            ++numDeviceNames;
-            if( !hwDevInfos || numDeviceNames > maxDeviceNames )
-            {
-                maxDeviceNames *= 2;
-                PA_UNLESS( hwDevInfos = (HwDevInfo *) realloc( hwDevInfos, maxDeviceNames * sizeof (HwDevInfo) ),
-                        paInsufficientMemory );
-            }
-
-            predefined = FindDeviceName( alsaDeviceName );
-
-            hwDevInfos[numDeviceNames - 1].alsaName = alsaDeviceName;
-            hwDevInfos[numDeviceNames - 1].name     = deviceName;
-            hwDevInfos[numDeviceNames - 1].isPlug   = 1;
-
-            if( predefined )
-            {
-                hwDevInfos[numDeviceNames - 1].hasPlayback = predefined->hasPlayback;
-                hwDevInfos[numDeviceNames - 1].hasCapture  = predefined->hasCapture;
-            }
-            else
-            {
-                hwDevInfos[numDeviceNames - 1].hasPlayback = 1;
-                hwDevInfos[numDeviceNames - 1].hasCapture  = 1;
-            }
-        }
-    }
-    else
-        PA_DEBUG(( "%s: Iterating over ALSA plugins failed: %s\n", __FUNCTION__, alsa_snd_strerror( res ) ));
-
-    /* allocate deviceInfo memory based on the number of devices */
-    PA_UNLESS( baseApi->deviceInfos = (PaDeviceInfo**)PaUtil_GroupAllocateMemory(
-            alsaApi->allocations, sizeof(PaDeviceInfo*) * (numDeviceNames) ), paInsufficientMemory );
-
-    /* allocate all device info structs in a contiguous block */
-    PA_UNLESS( deviceInfoArray = (PaAlsaDeviceInfo*)PaUtil_GroupAllocateMemory(
-            alsaApi->allocations, sizeof(PaAlsaDeviceInfo) * numDeviceNames ), paInsufficientMemory );
-
-    /* Loop over list of cards, filling in info. If a device is deemed unavailable (can't get name),
-     * it's ignored.
-     *
-     * Note that we do this in two stages. This is a workaround owing to the fact that the 'dmix'
-     * plugin may cause the underlying hardware device to be busy for a short while even after it
-     * (dmix) is closed. The 'default' plugin may also point to the dmix plugin, so the same goes
-     * for this.
-     */
-    PA_DEBUG(( "%s: Filling device info for %d devices\n", __FUNCTION__, numDeviceNames ));
-    for( i = 0, devIdx = 0; i < numDeviceNames; ++i )
-    {
-        PaAlsaDeviceInfo* devInfo = &deviceInfoArray[i];
-        HwDevInfo* hwInfo = &hwDevInfos[i];
-        if( !strcmp( hwInfo->name, "dmix" ) || !strcmp( hwInfo->name, "default" ) )
-        {
-            continue;
-        }
-
-        PA_ENSURE( FillInDevInfo( alsaApi, hwInfo, blocking, devInfo, &devIdx ) );
-    }
-    assert( devIdx < numDeviceNames );
-    /* Now inspect 'dmix' and 'default' plugins */
-    for( i = 0; i < numDeviceNames; ++i )
-    {
-        PaAlsaDeviceInfo* devInfo = &deviceInfoArray[i];
-        HwDevInfo* hwInfo = &hwDevInfos[i];
-        if( strcmp( hwInfo->name, "dmix" ) && strcmp( hwInfo->name, "default" ) )
-        {
-            continue;
-        }
-
-        PA_ENSURE( FillInDevInfo( alsaApi, hwInfo, blocking, devInfo, &devIdx ) );
-    }
-    free( hwDevInfos );
-
-    baseApi->info.deviceCount = devIdx;   /* Number of successfully queried devices */
-
-#ifdef PA_ENABLE_DEBUG_OUTPUT
-    PA_DEBUG(( "%s: Building device list took %f seconds\n", __FUNCTION__, PaUtil_GetTime() - startTime ));
-#endif
-
-end:
-    return result;
-
-error:
-    /* No particular action */
-    goto end;
-}
 
 /* Check against known device capabilities */
 static PaError ValidateParameters( const PaStreamParameters *parameters, PaUtilHostApiRepresentation *hostApi, StreamDirection mode )
@@ -1516,6 +391,7 @@ error:
     return result;
 }
 
+
 /* Given an open stream, what sample formats are available? */
 static PaSampleFormat GetAvailableFormats( snd_pcm_t *pcm )
 {
@@ -1550,6 +426,7 @@ static PaSampleFormat GetAvailableFormats( snd_pcm_t *pcm )
 
     return available;
 }
+
 
 /* Output to console all formats supported by device */
 static void LogAllAvailableFormats( snd_pcm_t *pcm )
@@ -1673,6 +550,7 @@ static void LogAllAvailableFormats( snd_pcm_t *pcm )
     PA_DEBUG(( " -------------------------\n" ));
 }
 
+
 static snd_pcm_format_t Pa2AlsaFormat( PaSampleFormat paFormat )
 {
     switch( paFormat )
@@ -1704,6 +582,7 @@ static snd_pcm_format_t Pa2AlsaFormat( PaSampleFormat paFormat )
     }
 }
 
+
 /** Open an ALSA pcm handle.
  *
  * The device to be open can be specified by name in a custom PaAlsaStreamInfo struct, or it will be by
@@ -1727,7 +606,7 @@ static PaError AlsaOpen( const PaUtilHostApiRepresentation *hostApi, const PaStr
         deviceName = streamInfo->deviceString;
 
     PA_DEBUG(( "%s: Opening device %s\n", __FUNCTION__, deviceName ));
-    if( (ret = OpenPcm( pcm, deviceName, streamDir == StreamDirection_In ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK,
+    if( (ret = Alsa_OpenPcm( pcm, deviceName, streamDir == StreamDirection_In ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK,
                     SND_PCM_NONBLOCK, 1 )) < 0 )
     {
         /* Not to be closed */
@@ -1742,6 +621,7 @@ end:
 error:
     goto end;
 }
+
 
 static PaError TestParameters( const PaUtilHostApiRepresentation *hostApi, const PaStreamParameters *parameters,
         double sampleRate, StreamDirection streamDir )
@@ -1768,7 +648,7 @@ static PaError TestParameters( const PaUtilHostApiRepresentation *hostApi, const
 
     alsa_snd_pcm_hw_params_any( pcm, hwParams );
 
-    if( SetApproximateSampleRate( pcm, hwParams, sampleRate ) < 0 )
+    if( Alsa_SetApproximateSampleRate( pcm, hwParams, sampleRate ) < 0 )
     {
         result = paInvalidSampleRate;
         goto error;
@@ -1822,6 +702,7 @@ end:
 error:
     goto end;
 }
+
 
 static PaError IsFormatSupported( struct PaUtilHostApiRepresentation *hostApi,
                                   const PaStreamParameters *inputParameters,
@@ -1932,12 +813,14 @@ error:
     return result;
 }
 
+
 static void PaAlsaStreamComponent_Terminate( PaAlsaStreamComponent *self )
 {
     alsa_snd_pcm_close( self->pcm );
     PaUtil_FreeMemory( self->userBuffers ); /* (Ptr can be NULL; PaUtil_FreeMemory includes a NULL check) */
     PaUtil_FreeMemory( self->nonMmapBuffer );
 }
+
 
 /*
 static int nearbyint_(float value) {
@@ -1946,6 +829,7 @@ static int nearbyint_(float value) {
     return (int)floor( value );
 }
 */
+
 
 /** Initiate configuration, preparing for determining a period size suitable for both capture and playback components.
  *
@@ -2034,9 +918,9 @@ static PaError PaAlsaStreamComponent_InitialConfigure( PaAlsaStreamComponent *se
     /* Some specific hardware (reported: Audio8 DJ) can fail with assertion during this step. */
     ENSURE_( alsa_snd_pcm_hw_params_set_format( pcm, hwParams, self->nativeFormat ), paUnanticipatedHostError );
 
-    if( ( result = SetApproximateSampleRate( pcm, hwParams, sr )) != paUnanticipatedHostError )
+    if( ( result = Alsa_SetApproximateSampleRate( pcm, hwParams, sr )) != paUnanticipatedHostError )
     {
-        ENSURE_( GetExactSampleRate( hwParams, &sr ), paUnanticipatedHostError );
+        ENSURE_( Alsa_GetExactSampleRate( hwParams, &sr ), paUnanticipatedHostError );
         if( result == paInvalidSampleRate ) /* From the SetApproximateSampleRate() call above */
         { /* The sample rate was returned as 'out of tolerance' of the one requested */
             PA_DEBUG(( "%s: Wanted %.3f, closest sample rate was %.3f\n", __FUNCTION__, sampleRate, sr ));
@@ -2059,6 +943,7 @@ error:
     /* No particular action */
     goto end;
 }
+
 
 /** Finish the configuration of the component's ALSA device.
  *
@@ -2129,6 +1014,7 @@ error:
     return result;
 }
 
+
 static PaError PaAlsaStream_Initialize( PaAlsaStream *self, PaAlsaHostApiRepresentation *alsaApi, const PaStreamParameters *inParams,
         const PaStreamParameters *outParams, double sampleRate, unsigned long framesPerUserBuffer, PaStreamCallback callback,
         PaStreamFlags streamFlags, void *userData )
@@ -2182,6 +1068,7 @@ error:
     return result;
 }
 
+
 /** Free resources associated with stream, and eventually stream itself.
  *
  * Frees allocated memory, and terminates individual StreamComponents.
@@ -2205,6 +1092,7 @@ static void PaAlsaStream_Terminate( PaAlsaStream *self )
     PaUtil_FreeMemory( self );
 }
 
+
 /** Calculate polling timeout
  *
  * @param frames Time to wait
@@ -2217,6 +1105,7 @@ static int CalculatePollTimeout( const PaAlsaStream *stream, unsigned long frame
     return (int)ceil( 1000 * frames / stream->streamRepresentation.streamInfo.sampleRate );
 }
 
+
 /** Align value in backward direction.
  *
  * @param v: Value to align.
@@ -2226,6 +1115,7 @@ static unsigned long PaAlsa_AlignBackward(unsigned long v, unsigned long align)
 {
     return ( v - ( align ? v % align : 0 ) );
 }
+
 
 /** Align value in forward direction.
  *
@@ -2237,6 +1127,7 @@ static unsigned long PaAlsa_AlignForward(unsigned long v, unsigned long align)
     unsigned long remainder = ( align ? ( v % align ) : 0);
     return ( remainder != 0 ? v + ( align - remainder ) : v );
 }
+
 
 /** Get size of host buffer maintained from the number of user frames, sample rate and suggested latency. Minimum double buffering
  *  is maintained to allow 100% CPU usage inside user callback.
@@ -2250,6 +1141,7 @@ static unsigned long PaAlsa_GetFramesPerHostBuffer(unsigned long userFramesPerBu
     unsigned long frames = userFramesPerBuffer + PA_MAX( userFramesPerBuffer, (unsigned long)( suggestedLatency * sampleRate ) );
     return frames;
 }
+
 
 /** Determine size per host buffer.
  *
@@ -2475,6 +1367,7 @@ error:
     return result;
 }
 
+
 /* We need to determine how many frames per host buffer (period) to use.  Our
  * goals are to provide the best possible performance, but also to
  * honor the requested latency settings as closely as we can. Therefore this
@@ -2695,6 +1588,7 @@ error:
     return result;
 }
 
+
 /** Set up ALSA stream parameters.
  *
  */
@@ -2784,6 +1678,7 @@ error:
     return result;
 }
 
+
 static PaError OpenStream( struct PaUtilHostApiRepresentation *hostApi,
                            PaStream** s,
                            const PaStreamParameters *inputParameters,
@@ -2869,6 +1764,7 @@ error:
     return result;
 }
 
+
 static PaError CloseStream( PaStream* s )
 {
     PaError result = paNoError;
@@ -2882,6 +1778,7 @@ static PaError CloseStream( PaStream* s )
     return result;
 }
 
+
 static void SilenceBuffer( PaAlsaStream *stream )
 {
     const snd_pcm_channel_area_t *areas;
@@ -2891,6 +1788,7 @@ static void SilenceBuffer( PaAlsaStream *stream )
     alsa_snd_pcm_areas_silence( areas, offset, stream->playback.numHostChannels, frames, stream->playback.nativeFormat );
     alsa_snd_pcm_mmap_commit( stream->playback.pcm, offset, frames );
 }
+
 
 /** Start/prepare pcm(s) for streaming.
  *
@@ -2935,6 +1833,7 @@ error:
     goto end;
 }
 
+
 /** Utility function for determining if pcms are in running state.
  *
  */
@@ -2976,6 +1875,7 @@ error:
 }
 #endif
 
+
 static PaError StartStream( PaStream *s )
 {
     PaError result = paNoError;
@@ -3009,6 +1909,7 @@ error:
 
     goto end;
 }
+
 
 /** Stop PCM handle, either softly or abruptly.
  */
@@ -3069,6 +1970,7 @@ error:
     goto end;
 }
 
+
 /** Stop or abort stream.
  *
  * If a stream is in callback mode we will have to inspect whether the background thread has
@@ -3120,15 +2022,18 @@ error:
     goto end;
 }
 
+
 static PaError StopStream( PaStream *s )
 {
     return RealStop( (PaAlsaStream *) s, 0 );
 }
 
+
 static PaError AbortStream( PaStream *s )
 {
     return RealStop( (PaAlsaStream * ) s, 1 );
 }
+
 
 /** The stream is considered stopped before StartStream, or AFTER a call to Abort/StopStream (callback
  * returning !paContinue is not considered)
@@ -3142,11 +2047,13 @@ static PaError IsStreamStopped( PaStream *s )
     return !IsStreamActive( s ) && !stream->callback_finished;
 }
 
+
 static PaError IsStreamActive( PaStream *s )
 {
     PaAlsaStream *stream = (PaAlsaStream*)s;
     return stream->isActive;
 }
+
 
 static PaTime GetStreamTime( PaStream *s )
 {
@@ -3175,6 +2082,7 @@ static PaTime GetStreamTime( PaStream *s )
     return timestamp.tv_sec + (PaTime)timestamp.tv_usec / 1e6;
 }
 
+
 static double GetStreamCpuLoad( PaStream* s )
 {
     PaAlsaStream *stream = (PaAlsaStream*)s;
@@ -3182,8 +2090,9 @@ static double GetStreamCpuLoad( PaStream* s )
     return PaUtil_GetCpuLoad( &stream->cpuLoadMeasurer );
 }
 
+
 /* Set the stream sample rate to a nominal value requested; allow only a defined tolerance range */
-static int SetApproximateSampleRate( snd_pcm_t *pcm, snd_pcm_hw_params_t *hwParams, double sampleRate )
+int Alsa_SetApproximateSampleRate( snd_pcm_t *pcm, snd_pcm_hw_params_t *hwParams, double sampleRate )
 {
     PaError result = paNoError;
     unsigned int reqRate, setRate, deviation;
@@ -3215,8 +2124,9 @@ error:
     goto end;
 }
 
+
 /* Return exact sample rate in param sampleRate */
-static int GetExactSampleRate( snd_pcm_hw_params_t *hwParams, double *sampleRate )
+int Alsa_GetExactSampleRate( snd_pcm_hw_params_t *hwParams, double *sampleRate )
 {
     unsigned int num, den = 1;
     int err;
@@ -3228,6 +2138,7 @@ static int GetExactSampleRate( snd_pcm_hw_params_t *hwParams, double *sampleRate
 
     return err;
 }
+
 
 /* Utility functions for blocking/callback interfaces */
 
@@ -3247,6 +2158,7 @@ error:
 
     return result;
 }
+
 
 /** Recover from xrun state.
  *
@@ -3314,6 +2226,7 @@ error:
     goto end;
 }
 
+
 /** Decide if we should continue polling for specified direction, eventually adjust the poll timeout.
  *
  */
@@ -3373,6 +2286,7 @@ error:
     return result;
 }
 
+
 /* Callback interface */
 
 static void OnExit( void *data )
@@ -3396,6 +2310,7 @@ static void OnExit( void *data )
     }
     stream->isActive = 0;
 }
+
 
 static void CalculateTimeInfo( PaAlsaStream *stream, PaStreamCallbackTimeInfo *timeInfo )
 {
@@ -3446,6 +2361,7 @@ static void CalculateTimeInfo( PaAlsaStream *stream, PaStreamCallbackTimeInfo *t
             (PaTime)playback_delay / stream->streamRepresentation.streamInfo.sampleRate;
     }
 }
+
 
 /** Called after buffer processing is finished.
  *
@@ -3502,11 +2418,13 @@ error:
     return result;
 }
 
+
 /* Extract buffer from channel area */
 static unsigned char *ExtractAddress( const snd_pcm_channel_area_t *area, snd_pcm_uframes_t offset )
 {
     return (unsigned char *) area->addr + ( area->first + offset * area->step ) / 8;
 }
+
 
 /** Do necessary adaption between user and host channels.
  *
@@ -3578,6 +2496,7 @@ error:
     return result;
 }
 
+
 static PaError PaAlsaStream_EndProcessing( PaAlsaStream *self, unsigned long numFrames, int *xrunOccurred )
 {
     PaError result = paNoError;
@@ -3600,6 +2519,7 @@ error:
     *xrunOccurred = xrun;
     return result;
 }
+
 
 /** Update the number of available frames.
  *
@@ -3626,6 +2546,7 @@ error:
     return result;
 }
 
+
 /** Fill in pollfd objects.
  */
 static PaError PaAlsaStreamComponent_BeginPolling( PaAlsaStreamComponent* self, struct pollfd* pfds )
@@ -3639,6 +2560,7 @@ static PaError PaAlsaStreamComponent_BeginPolling( PaAlsaStreamComponent* self, 
 
     return result;
 }
+
 
 /** Examine results from poll().
  *
@@ -3682,6 +2604,7 @@ static PaError PaAlsaStreamComponent_EndPolling( PaAlsaStreamComponent* self, st
 error:
     return result;
 }
+
 
 /** Return the number of available frames for this stream.
  *
@@ -3739,6 +2662,7 @@ end:
 error:
     return result;
 }
+
 
 /** Wait for and report available buffer space from ALSA.
  *
@@ -3932,6 +2856,7 @@ error:
     return result;
 }
 
+
 /** Register per-channel ALSA buffer information with buffer processor.
  *
  * Mmapped buffer space is acquired from ALSA, and registered with the buffer processor. Differences between the
@@ -4044,6 +2969,7 @@ error:
     return result;
 }
 
+
 /** Initiate buffer processing.
  *
  * ALSA buffers are registered with the PA buffer processor and the buffer size (in frames) set.
@@ -4155,6 +3081,7 @@ error:
 
     return result;
 }
+
 
 /** Callback thread's function.
  *
@@ -4355,6 +3282,7 @@ error:
     goto end;
 }
 
+
 /* Blocking interface */
 
 static PaError ReadStream( PaStream* s, void *buffer, unsigned long frames )
@@ -4416,6 +3344,7 @@ end:
 error:
     goto end;
 }
+
 
 static PaError WriteStream( PaStream* s, const void *buffer, unsigned long frames )
 {
@@ -4484,6 +3413,7 @@ error:
     goto end;
 }
 
+
 /* Return frames available for reading. In the event of an overflow, the capture pcm will be restarted */
 static signed long GetStreamReadAvailable( PaStream* s )
 {
@@ -4506,6 +3436,7 @@ static signed long GetStreamReadAvailable( PaStream* s )
 error:
     return result;
 }
+
 
 static signed long GetStreamWriteAvailable( PaStream* s )
 {
@@ -4534,6 +3465,7 @@ error:
     return result;
 }
 
+
 /* Extensions */
 
 void PaAlsa_InitializeStreamInfo( PaAlsaStreamInfo *info )
@@ -4544,11 +3476,13 @@ void PaAlsa_InitializeStreamInfo( PaAlsaStreamInfo *info )
     info->deviceString = NULL;
 }
 
+
 void PaAlsa_EnableRealtimeScheduling( PaStream *s, int enable )
 {
     PaAlsaStream *stream = (PaAlsaStream *) s;
     stream->rtSched = enable;
 }
+
 
 #if 0
 void PaAlsa_EnableWatchdog( PaStream *s, int enable )
@@ -4557,6 +3491,7 @@ void PaAlsa_EnableWatchdog( PaStream *s, int enable )
     stream->thread.useWatchdog = enable;
 }
 #endif
+
 
 static PaError GetAlsaStreamPointer( PaStream* s, PaAlsaStream** stream )
 {
@@ -4577,6 +3512,7 @@ error:
     return paNoError;
 }
 
+
 PaError PaAlsa_GetStreamInputCard( PaStream* s, int* card )
 {
     PaAlsaStream *stream;
@@ -4595,6 +3531,7 @@ PaError PaAlsa_GetStreamInputCard( PaStream* s, int* card )
 error:
     return result;
 }
+
 
 PaError PaAlsa_GetStreamOutputCard( PaStream* s, int* card )
 {
@@ -4615,8 +3552,27 @@ error:
     return result;
 }
 
+
+int PaAlsa_SetNumPeriods( int numPeriods )
+{
+    numPeriods_ = numPeriods;
+    return paNoError;
+}
+
+
 PaError PaAlsa_SetRetriesBusy( int retries )
 {
     busyRetries_ = retries;
     return paNoError;
 }
+
+
+void PaAlsa_SetLibraryPathName( const char *pathName )
+{
+#ifdef PA_ALSA_DYNAMIC
+    AlsaLoad_SetLibraryPathName(pathName);
+#else
+    (void)pathName;
+#endif
+}
+
