@@ -44,6 +44,8 @@
  */
 
 
+//#define PA_ENABLE_DEBUG_OUTPUT
+
 #define ALSA_PCM_NEW_HW_PARAMS_API
 #define ALSA_PCM_NEW_SW_PARAMS_API
 #include <alsa/asoundlib.h>
@@ -66,64 +68,108 @@
 #include "pa_alsa_load_dyn.h"
 
 
-/* Helper struct */
+/* Helper structs */
 typedef struct
 {
     char *alsaName;
     char *name;
     int isPlug;
-    int hasPlayback;
-    int hasCapture;
-} HwDevInfo;
+    int maxChansPlayback;
+    int maxChansCapture;
+} DevInfo;
+
+typedef struct
+{
+    int cardIdx; /* The Alsa card index */
+    unsigned int devicesFlags;  /* Each flag enables listing the corresponding device */
+    unsigned int subdevFlags;   /* Bit set will enable listing of the sub-devices */
+} HwDevConfig;
+
+typedef struct
+{
+    char *pcmName;
+    int numPlaybackChans;
+    int numCaptureChans;
+    unsigned int cardsFlags;
+} PcmDevConfig;
 
 
-HwDevInfo predefinedNames[] = {
-    { "center_lfe", NULL, 0, 1, 0 },
-/* { "default", NULL, 0, 1, 1 }, */
-    { "dmix", NULL, 0, 1, 0 },
-/* { "dpl", NULL, 0, 1, 0 }, */
-/* { "dsnoop", NULL, 0, 0, 1 }, */
-    { "front", NULL, 0, 1, 0 },
-    { "iec958", NULL, 0, 1, 0 },
-/* { "modem", NULL, 0, 1, 0 }, */
-    { "rear", NULL, 0, 1, 0 },
-    { "side", NULL, 0, 1, 0 },
-/*     { "spdif", NULL, 0, 0, 0 }, */
-    { "surround40", NULL, 0, 1, 0 },
-    { "surround41", NULL, 0, 1, 0 },
-    { "surround50", NULL, 0, 1, 0 },
-    { "surround51", NULL, 0, 1, 0 },
-    { "surround71", NULL, 0, 1, 0 },
+/* Define this to mean the number of channels is >0, but the number is not yet known */
+#define CHANS_UNKNOWN 1234
 
-    { "AndroidPlayback_Earpiece_normal",         NULL, 0, 1, 0 },
-    { "AndroidPlayback_Speaker_normal",          NULL, 0, 1, 0 },
-    { "AndroidPlayback_Bluetooth_normal",        NULL, 0, 1, 0 },
-    { "AndroidPlayback_Headset_normal",          NULL, 0, 1, 0 },
-    { "AndroidPlayback_Speaker_Headset_normal",  NULL, 0, 1, 0 },
-    { "AndroidPlayback_Bluetooth-A2DP_normal",   NULL, 0, 1, 0 },
-    { "AndroidPlayback_ExtraDockSpeaker_normal", NULL, 0, 1, 0 },
-    { "AndroidPlayback_TvOut_normal",            NULL, 0, 1, 0 },
+/* Macros for explicit initialization (robust if struct changes) */
+#define SET_CARD_DEVS_SUBS(c, d, s) { .cardIdx = c, .devicesFlags = d, .subdevFlags = s }
+#define SET_NAME_PLBK_CAPT_FLGS(n, p, c, f) { .pcmName = n, .numPlaybackChans = p, .numCaptureChans = c, .cardsFlags = f }
+#define ALL ((unsigned int )-1)
+#define END (-1)
 
-    { "AndroidRecord_Microphone",                NULL, 0, 0, 1 },
-    { "AndroidRecord_Earpiece_normal",           NULL, 0, 0, 1 },
-    { "AndroidRecord_Speaker_normal",            NULL, 0, 0, 1 },
-    { "AndroidRecord_Headset_normal",            NULL, 0, 0, 1 },
-    { "AndroidRecord_Bluetooth_normal",          NULL, 0, 0, 1 },
-    { "AndroidRecord_Speaker_Headset_normal",    NULL, 0, 0, 1 },
 
-    { NULL, NULL, 0, 1, 0 }
+/* This may not be needed, finally? - or dynamically allocated and filled? */
+HwDevConfig predefinedHw[] = {
+    SET_CARD_DEVS_SUBS( 0, ALL, 0 ),
+    SET_CARD_DEVS_SUBS( 1, ALL, 0 ),
+    SET_CARD_DEVS_SUBS( END, 0, 0 )
 };
 
 
-static const HwDevInfo *FindDeviceName( const char *name )
+PcmDevConfig predefinedPcms[] = {
+    SET_NAME_PLBK_CAPT_FLGS( "center_lfe", 1, 0, 1 ),
+/*  { "default", 1, 1 }, */
+    SET_NAME_PLBK_CAPT_FLGS( "dmix",   1, 0, 1 ),
+/*  { "dpl", 1, 0 }, */
+    SET_NAME_PLBK_CAPT_FLGS( "front",  2, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "iec958", 1, 0, 1 ),
+/*  { "modem", 1, 0 }, */
+    SET_NAME_PLBK_CAPT_FLGS( "rear",   1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "side",   1, 0, 1 ),
+/*  { "spdif", 0, 0 }, */
+    SET_NAME_PLBK_CAPT_FLGS( "surround40", 4, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "surround41", 5, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "surround50", 5, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "surround51", 6, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "surround71", 8, 0, 1 ),
+
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Earpiece_normal",         1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Speaker_normal",          1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Bluetooth_normal",        1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Headset_normal",          1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Speaker_Headset_normal",  1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Bluetooth-A2DP_normal",   1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_ExtraDockSpeaker_normal", 1, 0, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_TvOut_normal",            1, 0, 1 ),
+
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Microphone",                0, 1, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Earpiece_normal",           0, 1, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Speaker_normal",            0, 1, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Headset_normal",            0, 1, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Bluetooth_normal",          0, 1, 1 ),
+    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Speaker_Headset_normal",    0, 1, 1 ),
+
+    /* Setting both playback and capture to zero makes these ignored */
+    SET_NAME_PLBK_CAPT_FLGS( "hw",     0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "plughw", 0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "plug",   0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "dsnoop", 0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "tee",    0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "file",   0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "null",   0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "shm",    0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "cards",  0, 0, 0 ),
+    SET_NAME_PLBK_CAPT_FLGS( "rate_convert", 0, 0, 0 ),
+
+    SET_NAME_PLBK_CAPT_FLGS( NULL, 0, 0, 0 )
+};
+
+
+static const PcmDevConfig *FindPcmPredef( const char *name )
 {
     int i;
 
-    for( i = 0; predefinedNames[i].alsaName; i++ )
+    for( i = 0; predefinedPcms[i].pcmName; i++ )
     {
-        if( strcmp( name, predefinedNames[i].alsaName ) == 0 )
+        if( strcmp( name, predefinedPcms[i].pcmName ) == 0 )
         {
-            return &predefinedNames[i];
+            return &predefinedPcms[i];
         }
     }
 
@@ -181,26 +227,6 @@ error:
 }
 
 
-/* Disregard some standard plugins
- */
-static int IgnorePlugin( const char *pluginId )
-{
-    static const char *ignoredPlugins[] = {"hw", "plughw", "plug", "dsnoop", "tee",
-        "file", "null", "shm", "cards", "rate_convert", NULL};
-    int i = 0;
-    while( ignoredPlugins[i] )
-    {
-        if( !strcmp( pluginId, ignoredPlugins[i] ) )
-        {
-            return 1;
-        }
-        ++i;
-    }
-
-    return 0;
-}
-
-
 /* Initialize device info with invalid values (maxInputChannels and maxOutputChannels are set to zero since these indicate
  * whether input/output is available) */
 static void InitializeDeviceInfo( PaDeviceInfo *deviceInfo )
@@ -224,15 +250,15 @@ static void InitializeDeviceInfo( PaDeviceInfo *deviceInfo )
  * traits like max channels, suitable default latencies and default sample rate. Upon error, max channels is set to zero,
  * and a suitable result returned. The device is closed before returning.
  */
-static PaError GropeDevice( snd_pcm_t* pcm, int isPlug, StreamDirection mode, int openBlocking,
-        PaAlsaDeviceInfo* devInfo )
+static PaError GropeDevice( snd_pcm_t *pcm, int isPlug, StreamDirection mode, int openBlocking,
+        PaAlsaDeviceInfo *devInfo )
 {
     PaError result = paNoError;
     snd_pcm_hw_params_t *hwParams;
     snd_pcm_uframes_t alsaBufferFrames, alsaPeriodFrames;
     unsigned int minChans, maxChans;
-    int* minChannels, * maxChannels;
-    double * defaultLowLatency, * defaultHighLatency, * defaultSampleRate =
+    int *minChannels, *maxChannels;
+    double *defaultLowLatency, *defaultHighLatency, *defaultSampleRate =
         &devInfo->baseDeviceInfo.defaultSampleRate;
     double defaultSr = *defaultSampleRate;
     int dir;
@@ -339,8 +365,9 @@ error:
 }
 
 
-static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, HwDevInfo* deviceHwInfo, int blocking,
-        PaAlsaDeviceInfo* devInfo, int* devIdx )
+/* Fills in info for the Pa-device using device info given, opening the device and probing hw params */
+static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, DevInfo *deviceHwInfo, int blocking,
+        PaAlsaDeviceInfo *devInfo, int *devIdx )
 {
     PaError result = 0;
     PaDeviceInfo *baseDeviceInfo = &devInfo->baseDeviceInfo;
@@ -356,7 +383,7 @@ static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, HwDevInfo* d
      * hardware parameter configuration space */
 
     /* Query capture */
-    if( deviceHwInfo->hasCapture &&
+    if( ( deviceHwInfo->maxChansCapture > 0 ) &&
         Alsa_OpenPcm( &pcm, deviceHwInfo->alsaName, SND_PCM_STREAM_CAPTURE, blocking, 0 ) >= 0 )
     {
         if( GropeDevice( pcm, deviceHwInfo->isPlug, StreamDirection_In, blocking, devInfo ) != paNoError )
@@ -368,7 +395,7 @@ static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, HwDevInfo* d
     }
 
     /* Query playback */
-    if( deviceHwInfo->hasPlayback &&
+    if( ( deviceHwInfo->maxChansPlayback > 0 ) &&
         Alsa_OpenPcm( &pcm, deviceHwInfo->alsaName, SND_PCM_STREAM_PLAYBACK, blocking, 0 ) >= 0 )
     {
         if( GropeDevice( pcm, deviceHwInfo->isPlug, StreamDirection_Out, blocking, devInfo ) != paNoError )
@@ -427,14 +454,16 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     snd_ctl_card_info_t *cardInfo;
     PaError result = paNoError;
     size_t numDeviceNames = 0, maxDeviceNames = 1, i;
-    HwDevInfo *hwDevInfos = NULL;
+    size_t numPcmNames = 0, maxPcmNames = 1;
+    DevInfo *hwDevInfos = NULL; /* Buildup an array of structs with hw info */
+    DevInfo *pcmDevInfos = NULL; /* Buildup an array of structs with pcm info */
     snd_config_t *topNode = NULL;
     snd_pcm_info_t *pcmInfo;
     int res;
     int blocking = SND_PCM_NONBLOCK;
     int usePlughw = 0;
     char *hwPrefix = "";
-    char alsaCardName[50];
+    char alsaCardStr[10]; /* The string used to open the snd_ctl interface (typically hw:x) */
 #ifdef PA_ENABLE_DEBUG_OUTPUT
     PaTime startTime = PaUtil_GetTime();
 #endif
@@ -454,8 +483,8 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     baseApi->info.defaultInputDevice = paNoDevice;
     baseApi->info.defaultOutputDevice = paNoDevice;
 
-    /* Gather info about hw devices
 
+    /* Gather info about hw devices
      * alsa_snd_card_next() modifies the integer passed to it to be:
      *      the index of the first card if the parameter is -1
      *      the index of the next card if the parameter is the index of a card
@@ -472,51 +501,44 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
         snd_ctl_t *ctl;
         char buf[50];
 
-        snprintf( alsaCardName, sizeof (alsaCardName), "hw:%d", cardIdx );
-
-        /* Acquire name of card */
-        if( alsa_snd_ctl_open( &ctl, alsaCardName, 0 ) < 0 )
+        /* Find out about the card by opening the hw:x control interface */
+        snprintf( alsaCardStr, sizeof (alsaCardStr), "hw:%d", cardIdx );
+        if( alsa_snd_ctl_open( &ctl, alsaCardStr, 0 ) < 0 )
         {
             /* Unable to open card :( */
-            PA_DEBUG(( "%s: Unable to open device %s\n", __FUNCTION__, alsaCardName ));
+            PA_DEBUG(( "%s: Unable to open device %s\n", __FUNCTION__, alsaCardStr ));
             continue;
         }
         alsa_snd_ctl_card_info( ctl, cardInfo );
 
+        /* Acquire name of card */
         PA_ENSURE( StrDuplA( alsaApi, &cardName, alsa_snd_ctl_card_info_get_name( cardInfo )) );
 
+        /* Find out about devices on a card */
         while( alsa_snd_ctl_pcm_next_device( ctl, &devIdx ) == 0 && devIdx >= 0 )
         {
             char *alsaDeviceName, *deviceName, *infoName;
             size_t len;
-            int hasPlayback = 0, hasCapture = 0;
-
-            snprintf( buf, sizeof (buf), "%s%s,%d", hwPrefix, alsaCardName, devIdx );
+            int chansPlayback = 0, chansCapture = 0;
 
             /* Obtain info about this particular device */
             alsa_snd_pcm_info_set_device( pcmInfo, devIdx );
             alsa_snd_pcm_info_set_subdevice( pcmInfo, 0 );
             alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_CAPTURE );
             if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
-            {
-                hasCapture = 1;
-            }
+                chansCapture = CHANS_UNKNOWN;
 
             alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_PLAYBACK );
             if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
-            {
-                hasPlayback = 1;
-            }
+                chansPlayback = CHANS_UNKNOWN;
 
-            if( !hasPlayback && !hasCapture )
-            {
-                /* Error */
-                continue;
-            }
+            if( chansPlayback == 0 && chansCapture == 0 )
+                continue; /* Unexpected, but just move on to the next! */
 
+            /* Put together the names for the device info, allocating memory */
             infoName = SkipCardDetailsInName( (char *)alsa_snd_pcm_info_get_name( pcmInfo ), cardName );
-
-            /* The length of the string written by snprintf plus terminating 0 */
+            snprintf( buf, sizeof (buf), "%s%s,%d", hwPrefix, alsaCardStr, devIdx );
+            /* Workout the length of the string written by snprintf plus terminating 0 */
             len = snprintf( NULL, 0, "%s: %s (%s)", cardName, infoName, buf ) + 1;
             PA_UNLESS( deviceName = (char *)PaUtil_GroupAllocateMemory( alsaApi->allocations, len ),
                     paInsufficientMemory );
@@ -526,7 +548,7 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
             if( !hwDevInfos || numDeviceNames > maxDeviceNames )
             {
                 maxDeviceNames *= 2;
-                PA_UNLESS( hwDevInfos = (HwDevInfo *) realloc( hwDevInfos, maxDeviceNames * sizeof (HwDevInfo) ),
+                PA_UNLESS( hwDevInfos = (DevInfo *) realloc( hwDevInfos, maxDeviceNames * sizeof (DevInfo) ),
                         paInsufficientMemory );
             }
 
@@ -535,8 +557,8 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
             hwDevInfos[ numDeviceNames - 1 ].alsaName = alsaDeviceName;
             hwDevInfos[ numDeviceNames - 1 ].name = deviceName;
             hwDevInfos[ numDeviceNames - 1 ].isPlug = usePlughw;
-            hwDevInfos[ numDeviceNames - 1 ].hasPlayback = hasPlayback;
-            hwDevInfos[ numDeviceNames - 1 ].hasCapture = hasCapture;
+            hwDevInfos[ numDeviceNames - 1 ].maxChansPlayback = chansPlayback;
+            hwDevInfos[ numDeviceNames - 1 ].maxChansCapture = chansCapture;
         }
         alsa_snd_ctl_close( ctl );
     }
@@ -559,7 +581,7 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
             int err = 0;
 
             char *alsaDeviceName, *deviceName;
-            const HwDevInfo *predefined = NULL;
+            const PcmDevConfig *predefinedPcm = NULL;
             snd_config_t *n = alsa_snd_config_iterator_entry( i ), * tp = NULL;;
 
             if( (err = alsa_snd_config_search( n, "type", &tp )) < 0 )
@@ -574,7 +596,9 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
                 ENSURE_( alsa_snd_config_get_string( tp, &tpStr ), paUnanticipatedHostError );
             }
             ENSURE_( alsa_snd_config_get_id( n, &idStr ), paUnanticipatedHostError );
-            if( IgnorePlugin( idStr ) )
+
+            predefinedPcm = FindPcmPredef( idStr );
+            if( predefinedPcm && ( predefinedPcm->numPlaybackChans == 0 && predefinedPcm->numCaptureChans == 0 ) )
             {
                 PA_DEBUG(( "%s: Ignoring ALSA plugin device [%s] of type [%s]\n", __FUNCTION__, idStr, tpStr ));
                 continue;
@@ -588,76 +612,95 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
                                                             strlen(idStr) + 1 ), paInsufficientMemory );
             strcpy( deviceName, idStr );
 
-            ++numDeviceNames;
-            if( !hwDevInfos || numDeviceNames > maxDeviceNames )
+            ++numPcmNames;
+            if( !pcmDevInfos || numPcmNames > maxPcmNames )
             {
-                maxDeviceNames *= 2;
-                PA_UNLESS( hwDevInfos = (HwDevInfo *) realloc( hwDevInfos, maxDeviceNames * sizeof (HwDevInfo) ),
+                maxPcmNames *= 2;
+                PA_UNLESS( pcmDevInfos = (DevInfo *) realloc( pcmDevInfos, maxPcmNames * sizeof (DevInfo) ),
                         paInsufficientMemory );
             }
 
-            predefined = FindDeviceName( alsaDeviceName );
+            pcmDevInfos[numPcmNames - 1].alsaName = alsaDeviceName;
+            pcmDevInfos[numPcmNames - 1].name     = deviceName;
+            pcmDevInfos[numPcmNames - 1].isPlug   = 1;
 
-            hwDevInfos[numDeviceNames - 1].alsaName = alsaDeviceName;
-            hwDevInfos[numDeviceNames - 1].name     = deviceName;
-            hwDevInfos[numDeviceNames - 1].isPlug   = 1;
-
-            if( predefined )
+            if( predefinedPcm )
             {
-                hwDevInfos[numDeviceNames - 1].hasPlayback = predefined->hasPlayback;
-                hwDevInfos[numDeviceNames - 1].hasCapture  = predefined->hasCapture;
+                pcmDevInfos[numPcmNames - 1].maxChansPlayback = predefinedPcm->numPlaybackChans;
+                pcmDevInfos[numPcmNames - 1].maxChansCapture  = predefinedPcm->numCaptureChans;
             }
             else
             {
-                hwDevInfos[numDeviceNames - 1].hasPlayback = 1;
-                hwDevInfos[numDeviceNames - 1].hasCapture  = 1;
+                pcmDevInfos[numPcmNames - 1].maxChansPlayback = CHANS_UNKNOWN;
+                pcmDevInfos[numPcmNames - 1].maxChansCapture  = CHANS_UNKNOWN;
             }
         }
     }
     else
         PA_DEBUG(( "%s: Iterating over ALSA plugins failed: %s\n", __FUNCTION__, alsa_snd_strerror( res ) ));
 
+
+    /* The last stage is to build the final list of Alsa 'Portaudio-devices',
+       since we now know the hardware (card, device [sub-dev]) and available pcms.
+       For now, as previously, simply list the hw devices, then the pcms */
+
     /* allocate deviceInfo memory based on the number of devices */
     PA_UNLESS( baseApi->deviceInfos = (PaDeviceInfo**)PaUtil_GroupAllocateMemory(
-            alsaApi->allocations, sizeof(PaDeviceInfo*) * (numDeviceNames) ), paInsufficientMemory );
+            alsaApi->allocations, sizeof(PaDeviceInfo*) * (numDeviceNames+numPcmNames) ), paInsufficientMemory );
 
     /* allocate all device info structs in a contiguous block */
     PA_UNLESS( deviceInfoArray = (PaAlsaDeviceInfo*)PaUtil_GroupAllocateMemory(
-            alsaApi->allocations, sizeof(PaAlsaDeviceInfo) * numDeviceNames ), paInsufficientMemory );
+            alsaApi->allocations, sizeof(PaAlsaDeviceInfo) * (numDeviceNames+numPcmNames) ), paInsufficientMemory );
 
     /* Loop over list of cards, filling in info. If a device is deemed unavailable (can't get name),
      * it's ignored.
-     *
+     */
+    devIdx = 0; /* This will be incremented by FillInDevInfo() if the device is not skipped */
+    PA_DEBUG(( "%s: Filling hw device info for %d devices\n", __FUNCTION__, numDeviceNames ));
+    for( i = 0; i < numDeviceNames; ++i )
+    {
+        PaAlsaDeviceInfo *devInfo = &deviceInfoArray[i];
+        DevInfo *hwInfo = &hwDevInfos[i];
+
+        PA_ENSURE( FillInDevInfo( alsaApi, hwInfo, blocking, devInfo, &devIdx ) );
+    }
+    assert( devIdx <= numDeviceNames );
+    numDeviceNames = devIdx; /* This will reduce it to the actual number in the list */
+
+
+    /* Now loop over the PCMs (for now), and leave default to last
      * Note that we do this in two stages. This is a workaround owing to the fact that the 'dmix'
      * plugin may cause the underlying hardware device to be busy for a short while even after it
      * (dmix) is closed. The 'default' plugin may also point to the dmix plugin, so the same goes
      * for this.
      */
-    PA_DEBUG(( "%s: Filling device info for %d devices\n", __FUNCTION__, numDeviceNames ));
-    for( i = 0, devIdx = 0; i < numDeviceNames; ++i )
+    PA_DEBUG(( "%s: Filling pcm device info for %d devices\n", __FUNCTION__, numPcmNames ));
+    for( i = 0; i < numPcmNames; ++i )
     {
-        PaAlsaDeviceInfo* devInfo = &deviceInfoArray[i];
-        HwDevInfo* hwInfo = &hwDevInfos[i];
-        if( !strcmp( hwInfo->name, "dmix" ) || !strcmp( hwInfo->name, "default" ) )
+        PaAlsaDeviceInfo *devInfo = &deviceInfoArray[i+numDeviceNames];
+        DevInfo *pcmInfo = &pcmDevInfos[i];
+        if( !strcmp( pcmInfo->name, "dmix" ) || !strcmp( pcmInfo->name, "default" ) )
         {
             continue;
         }
 
-        PA_ENSURE( FillInDevInfo( alsaApi, hwInfo, blocking, devInfo, &devIdx ) );
+        PA_ENSURE( FillInDevInfo( alsaApi, pcmInfo, blocking, devInfo, &devIdx ) );
     }
-    assert( devIdx < numDeviceNames );
+
     /* Now inspect 'dmix' and 'default' plugins */
-    for( i = 0; i < numDeviceNames; ++i )
+    for( i = 0; i < numPcmNames; ++i )
     {
-        PaAlsaDeviceInfo* devInfo = &deviceInfoArray[i];
-        HwDevInfo* hwInfo = &hwDevInfos[i];
-        if( strcmp( hwInfo->name, "dmix" ) && strcmp( hwInfo->name, "default" ) )
+        PaAlsaDeviceInfo *devInfo = &deviceInfoArray[i+numDeviceNames];
+        DevInfo *pcmInfo = &pcmDevInfos[i];
+        if( strcmp( pcmInfo->name, "dmix" ) && strcmp( pcmInfo->name, "default" ) )
         {
             continue;
         }
 
-        PA_ENSURE( FillInDevInfo( alsaApi, hwInfo, blocking, devInfo, &devIdx ) );
+        PA_ENSURE( FillInDevInfo( alsaApi, pcmInfo, blocking, devInfo, &devIdx ) );
     }
+    assert( devIdx <= numDeviceNames+numPcmNames );
+
     free( hwDevInfos );
 
     baseApi->info.deviceCount = devIdx;   /* Number of successfully queried devices */
