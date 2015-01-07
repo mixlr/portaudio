@@ -58,7 +58,9 @@
 #include "pa_debugprint.h"
 
 
+#ifdef PA_ALSA_DYNAMIC
 static const char *g_AlsaLibName = PA_ALSA_PATHNAME;
+#endif
 /* Handle to dynamically loaded library. */
 static void *g_AlsaLib = NULL;
 
@@ -209,7 +211,7 @@ static void load_alsa_functions(void *lib_handle)
             PA_DEBUG(( "%s: symbol [%s] not found in - %s, error: %s\n", __FUNCTION__, #x, g_AlsaLibName, dlerror() )); } \
         } while(0)
 #else
-#define _PA_LOAD_FUNC(x) alsa_##x = &x
+#define _PA_LOAD_FUNC(x) do {  (void)lib_handle; alsa_##x = &x; } while (0)
 #endif
 
     _PA_LOAD_FUNC(snd_pcm_open);
