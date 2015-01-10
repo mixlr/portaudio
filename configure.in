@@ -392,7 +392,7 @@ case "${host_os}" in
         if [[ "$have_alsa" = "yes" ] && [ "$with_alsa" != "no" ]] ; then
            DLL_LIBS="$DLL_LIBS -lasound"
            LIBS="$LIBS -lasound"
-           OTHER_OBJS="$OTHER_OBJS src/hostapi/alsa/pa_linux_alsa.o src/hostapi/alsa/pa_alsa_devs_list.o src/hostapi/alsa/pa_alsa_load_dyn.o"
+           OTHER_OBJS="$OTHER_OBJS src/hostapi/alsa/pa_linux_alsa.o src/hostapi/alsa/pa_alsa_devs_list.o src/hostapi/alsa/pa_alsa_load_dyn.o src/hostapi/alsa/pa_alsa_predefs.o"
            INCLUDES="$INCLUDES pa_linux_alsa.h"
            AC_DEFINE(PA_USE_ALSA,1)
         fi
