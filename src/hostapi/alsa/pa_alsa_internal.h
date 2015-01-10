@@ -7,7 +7,7 @@
  * Copyright (c) 2002 Joshua Haberman <joshua@haberman.com>
  * Copyright (c) 2005-2009 Arve Knudsen <arve.knudsen@gmail.com>
  * Copyright (c) 2008 Kevin Kofler <kevin.kofler@chello.at>
- * Copyright (c) 2014 Alan Horstmann <gineera@aspect135.co.uk>
+ * Copyright (c) 2014-2015 Alan Horstmann <gineera@aspect135.co.uk>
  *
  * Based on the Open Source API proposed by Ross Bencina
  * Copyright (c) 1999-2002 Ross Bencina, Phil Burk
@@ -45,6 +45,18 @@
 
 #ifndef PA_ALSA_INTERNAL_H
 #define PA_ALSA_INTERNAL_H
+
+#define ALSA_PCM_NEW_HW_PARAMS_API
+#define ALSA_PCM_NEW_SW_PARAMS_API
+#include <alsa/asoundlib.h>
+#undef ALSA_PCM_NEW_HW_PARAMS_API
+#undef ALSA_PCM_NEW_SW_PARAMS_API
+
+#include "pa_allocation.h"
+#include "pa_hostapi.h"
+#include "pa_stream.h"
+#include "pa_types.h"
+
 
 /* Check return value of ALSA function, and map it to PaError */
 #define ENSURE_(expr, code) \
@@ -104,6 +116,29 @@ typedef enum
     StreamDirection_In,
     StreamDirection_Out
 } StreamDirection;
+
+
+/* Helper structs for the predefines */
+typedef struct
+{
+    int cardIdx; /* The Alsa card index */
+    unsigned int devicesFlags;  /* Each flag enables listing the corresponding device */
+    unsigned int subdevFlags;   /* Bit set will enable listing of the sub-devices */
+    unsigned int plughwFlags;    /* Bit set activates plughw on the corresponding device */
+} CardHwConfig;
+
+typedef struct
+{
+    char *pcmName;
+    int numPlaybackChans;
+    int numCaptureChans;
+    unsigned int cardsFlags;
+} PcmDevConfig;
+
+
+/* These two 'pre-defined' tables are in the separate file 'pa_alsa_predefs.c' */
+extern CardHwConfig predefinedHw[];
+extern PcmDevConfig predefinedPcms[];
 
 
 /* Internal functions */

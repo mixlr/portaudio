@@ -7,7 +7,7 @@
  * Copyright (c) 2002 Joshua Haberman <joshua@haberman.com>
  * Copyright (c) 2005-2009 Arve Knudsen <arve.knudsen@gmail.com>
  * Copyright (c) 2008 Kevin Kofler <kevin.kofler@chello.at>
- * Copyright (c) 2014 Alan Horstmann <gineera@aspect135.co.uk>
+ * Copyright (c) 2014-2015 Alan Horstmann <gineera@aspect135.co.uk>
  *
  * Based on the Open Source API proposed by Ross Bencina
  * Copyright (c) 1999-2002 Ross Bencina, Phil Burk

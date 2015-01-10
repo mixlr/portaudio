@@ -7,7 +7,7 @@
  * Copyright (c) 2002 Joshua Haberman <joshua@haberman.com>
  * Copyright (c) 2005-2009 Arve Knudsen <arve.knudsen@gmail.com>
  * Copyright (c) 2008 Kevin Kofler <kevin.kofler@chello.at>
- * Copyright (c) 2014 Alan Horstmann <gineera@aspect135.co.uk>
+ * Copyright (c) 2014-2015 Alan Horstmann <gineera@aspect135.co.uk>
  *
  * Based on the Open Source API proposed by Ross Bencina
  * Copyright (c) 1999-2002 Ross Bencina, Phil Burk
@@ -46,29 +46,25 @@
 
 #define PA_ENABLE_DEBUG_OUTPUT
 
-#define ALSA_PCM_NEW_HW_PARAMS_API
-#define ALSA_PCM_NEW_SW_PARAMS_API
-#include <alsa/asoundlib.h>
-#undef ALSA_PCM_NEW_HW_PARAMS_API
-#undef ALSA_PCM_NEW_SW_PARAMS_API
-
 #include <limits.h>
 
-#include "portaudio.h"
 #include "pa_util.h"
 #include "pa_unix_util.h"
-#include "pa_allocation.h"
-#include "pa_hostapi.h"
-#include "pa_stream.h"
-#include "pa_process.h"
 #include "pa_debugprint.h"
 
-#include "pa_linux_alsa.h"
 #include "pa_alsa_internal.h"
 #include "pa_alsa_load_dyn.h"
 
 
-/* Helper structs */
+/* Means the number of channels is >0, but the number is not yet known */
+#define CHANS_UNKNOWN 1234
+
+/* Max numbers the code allows - smallest Linux int may be 32-bit - or use SIZEOF_INT? */
+//#define MAX_CARDS       32
+//#define MAX_CARD_DEVS   32
+
+
+/* Helper struct for the device listing process */
 typedef struct
 {
     char *alsaName;
@@ -78,87 +74,21 @@ typedef struct
     int maxChansCapture;
 } DevInfo;
 
-typedef struct
+
+static const CardHwConfig *FindCardPredef( int cIdx, const char *cName )
 {
-    int cardIdx; /* The Alsa card index */
-    unsigned int devicesFlags;  /* Each flag enables listing the corresponding device */
-    unsigned int subdevFlags;   /* Bit set will enable listing of the sub-devices */
-} HwDevConfig;
+    /* For now, don't match by name; ignore it */
+    (void) cName;
+    int i;
 
-typedef struct
-{
-    char *pcmName;
-    int numPlaybackChans;
-    int numCaptureChans;
-    unsigned int cardsFlags;
-} PcmDevConfig;
+    for( i = 0; predefinedHw[i].cardIdx > -127; i++ ) /* '-127' is the end marker */
+    {
+        if( predefinedHw[i].cardIdx == cIdx )
+            return &predefinedHw[i];
+    }
 
-
-/* Define this to mean the number of channels is >0, but the number is not yet known */
-#define CHANS_UNKNOWN 1234
-
-/* Macros for explicit initialization (robust if struct changes) */
-#define SET_CARD_DEVS_SUBS(c, d, s) { .cardIdx = c, .devicesFlags = d, .subdevFlags = s }
-#define SET_NAME_PLBK_CAPT_FLGS(n, p, c, f) { .pcmName = n, .numPlaybackChans = p, .numCaptureChans = c, .cardsFlags = f }
-#define ALL ((unsigned int )-1)
-#define END (-1)
-
-
-/* This may not be needed, finally? - or dynamically allocated and filled? */
-HwDevConfig predefinedHw[] = {
-    SET_CARD_DEVS_SUBS( 0, ALL, 0 ),
-    SET_CARD_DEVS_SUBS( 1, ALL, 0 ),
-    SET_CARD_DEVS_SUBS( END, 0, 0 )
-};
-
-
-PcmDevConfig predefinedPcms[] = {
-    SET_NAME_PLBK_CAPT_FLGS( "center_lfe", 1, 0, 1 ),
-/*  { "default", 1, 1 }, */
-    SET_NAME_PLBK_CAPT_FLGS( "dmix",   1, 0, 1 ),
-/*  { "dpl", 1, 0 }, */
-    SET_NAME_PLBK_CAPT_FLGS( "front",  2, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "iec958", 1, 0, 1 ),
-/*  { "modem", 1, 0 }, */
-    SET_NAME_PLBK_CAPT_FLGS( "rear",   1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "side",   1, 0, 1 ),
-/*  { "spdif", 0, 0 }, */
-    SET_NAME_PLBK_CAPT_FLGS( "surround40", 4, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "surround41", 5, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "surround50", 5, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "surround51", 6, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "surround71", 8, 0, 1 ),
-
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Earpiece_normal",         1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Speaker_normal",          1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Bluetooth_normal",        1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Headset_normal",          1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Speaker_Headset_normal",  1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_Bluetooth-A2DP_normal",   1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_ExtraDockSpeaker_normal", 1, 0, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidPlayback_TvOut_normal",            1, 0, 1 ),
-
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Microphone",                0, 1, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Earpiece_normal",           0, 1, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Speaker_normal",            0, 1, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Headset_normal",            0, 1, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Bluetooth_normal",          0, 1, 1 ),
-    SET_NAME_PLBK_CAPT_FLGS( "AndroidRecord_Speaker_Headset_normal",    0, 1, 1 ),
-
-    /* Setting both playback and capture to zero makes these ignored */
-    SET_NAME_PLBK_CAPT_FLGS( "hw",     0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "plughw", 0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "plug",   0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "dsnoop", 0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "tee",    0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "file",   0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "null",   0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "shm",    0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "cards",  0, 0, 0 ),
-    SET_NAME_PLBK_CAPT_FLGS( "rate_convert", 0, 0, 0 ),
-
-    SET_NAME_PLBK_CAPT_FLGS( NULL, 0, 0, 0 )
-};
+    return NULL;
+}
 
 
 static const PcmDevConfig *FindPcmPredef( const char *name )
@@ -168,9 +98,7 @@ static const PcmDevConfig *FindPcmPredef( const char *name )
     for( i = 0; predefinedPcms[i].pcmName; i++ )
     {
         if( strcmp( name, predefinedPcms[i].pcmName ) == 0 )
-        {
             return &predefinedPcms[i];
-        }
     }
 
     return NULL;
@@ -445,7 +373,7 @@ end:
  * this is NULL, and devCount 0, and memory is allocated as needed (later free() is required).
  * The DevInfo structs will be filled with brief info for each item found */
 static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, DevInfo **hwDevInfosHdle,
-                                        int *devCount, unsigned int usePlughwFlags )
+                                        int *devCount, int *cardCount, unsigned int usePlughw )
 {
     DevInfo *foundHwDevInfos = *hwDevInfosHdle;
     PaError result = paNoError;
@@ -455,12 +383,6 @@ static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, Dev
     char alsaCardStr[10]; /* The string used to open the snd_ctl interface (typically hw:x) */
     char *hwPrefix = "";
     int maxDeviceNames = *devCount > 0 ? *devCount: 1; /* At least this amount of space must aleady be allocated */
-
-    if( usePlughwFlags ) /* For now, don't check individual flag bits */
-    {
-        hwPrefix = "plug";
-        PA_DEBUG(( "%s: Using Plughw\n", __FUNCTION__ ));
-    }
 
     alsa_snd_ctl_card_info_alloca( &cardInfo );
     alsa_snd_pcm_info_alloca( &pcmInfo );
@@ -473,6 +395,7 @@ static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, Dev
         char *cardName;
         int deviceIdx = -1;
         snd_ctl_t *ctl;
+        const CardHwConfig *cardPredef;
         char buf[50];
 
         /* Find out about the card by opening the hw:x control interface */
@@ -489,12 +412,15 @@ static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, Dev
         PA_ENSURE( StrDuplA( alsaApi, &cardName, alsa_snd_ctl_card_info_get_name( cardInfo )) );
         PA_DEBUG(( "%s: Found card, index %d: [%s]\n", __FUNCTION__, cardIdx, cardName ));
 
+        /* See if there is a matching predefined config for this card */
+        cardPredef = FindCardPredef( cardIdx, cardName );
+
         /* Find out about devices on a card */
         while( alsa_snd_ctl_pcm_next_device( ctl, &deviceIdx ) == 0 && deviceIdx >= 0 )
         {
             char *alsaDeviceName, *deviceName, *infoName;
             size_t len;
-            int chansPlayback = 0, chansCapture = 0;
+            int chansPlayback = 0, chansCapture = 0, usePlug;
 
             /* Obtain info about this particular device */
             alsa_snd_pcm_info_set_device( pcmInfo, deviceIdx );
@@ -509,6 +435,10 @@ static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, Dev
 
             if( chansPlayback == 0 && chansCapture == 0 )
                 continue; /* Unexpected, but just move on to the next! */
+
+            /* The 'plughw:' pcm will be used instead of 'hw:', set either globally or in a card config */
+            usePlug = usePlughw || ( cardPredef && (cardPredef->plughwFlags & ( 1 << deviceIdx ) ));
+            hwPrefix = usePlug ? "plug" : "";
 
             PA_DEBUG(( "%s %d", (deviceIdx == 0 ? "  ..devices (indexes):" : ","), deviceIdx ));
 
@@ -533,12 +463,13 @@ static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, Dev
 
             foundHwDevInfos[*devCount - 1].alsaName = alsaDeviceName;
             foundHwDevInfos[*devCount - 1].name = deviceName;
-            foundHwDevInfos[*devCount - 1].isPlug = usePlughwFlags;
+            foundHwDevInfos[*devCount - 1].isPlug = usePlug;
             foundHwDevInfos[*devCount - 1].maxChansPlayback = chansPlayback;
             foundHwDevInfos[*devCount - 1].maxChansCapture = chansCapture;
         }
         PA_DEBUG(( "\n" ));
         alsa_snd_ctl_close( ctl );
+        *cardCount = cardIdx + 1; /* The last time round the loop will leave the count correct */
     }
     *hwDevInfosHdle = foundHwDevInfos; /* Pass back the handle to the DevInfo structs */
 
@@ -642,17 +573,68 @@ error:
 }
 
 
+/* Add a pcm-type device to a given device list, possibly as an extended device with card suffix if an idex is given */
+PaError AddDeviceToList( PaAlsaHostApiRepresentation *alsaApi, DevInfo **dstInfosHdle, DevInfo srcInfos, int *devCount, int cdIdx )
+{
+    DevInfo *addedDevInfos = *dstInfosHdle;
+    PaError result = paNoError;
+    char *deviceName;
+    int maxAddedDevs = *devCount > 0 ? *devCount: 1;
 
-/** Build PaDeviceInfo list
- *  Inore devices for which we cannot determine capabilities (possibly busy, sigh) */
+    PA_UNLESS( deviceName = (char*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
+                                                            strlen(srcInfos.name) + 4 ), paInsufficientMemory );
+    if( cdIdx < 0 )
+        strcpy( deviceName, srcInfos.name ); /* Don't add  card suffix */
+    else
+        sprintf( deviceName, "%s:%d", srcInfos.name, cdIdx );
+
+    (*devCount)++;
+    if( !addedDevInfos || *devCount > maxAddedDevs )
+    {
+        maxAddedDevs *= 2;
+        PA_UNLESS( addedDevInfos = (DevInfo *) realloc( addedDevInfos, maxAddedDevs * sizeof (DevInfo) ),
+                paInsufficientMemory );
+    }
+
+    PA_DEBUG(( "%s: Forming extended device %d: %s\n", __FUNCTION__, *devCount, deviceName ));
+    /* Copy the info src->dst, and overwrite the names */
+    memcpy( &addedDevInfos[*devCount - 1], &srcInfos, sizeof(DevInfo) );
+    addedDevInfos[*devCount - 1].alsaName = deviceName;
+    addedDevInfos[*devCount - 1].name     = deviceName;
+
+    *dstInfosHdle = addedDevInfos; /* Pass back the handle to the DevInfo structs */
+
+error:
+    return result;
+}
+
+
+#if 0
+/* Check through a list of hw infos for a given card and test if it has at least the num channels requested
+ * Those channels could be on any of the hw devices on that card */
+int CheckCardMaxChans( DevInfo *hwInfoList, int numHwDevs, int cardIdx, int reqPlayChans, int reqCaptChans )
+{
+}
+#endif
+
+
+
+/** Build a list of Portaudio devices.
+ *
+ *  The Pa internal PaUtilHostApiRepresentation has an array of pointers to PaDeviceInfo structs for
+ *  each device in the list.  Both the pointer array itself and the structures are allocated in
+ *  this function as hostApi allocations.
+ *  The process involves finding out about the specific Alsa system, formulating a list of
+ *  Pa devices that will be available to the 'user' and filling in the PaDeviceInfo.
+ *  Ignore devices for which we cannot determine capabilities (possibly busy, sigh) */
 PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
 {
     PaUtilHostApiRepresentation *baseApi = &alsaApi->baseHostApiRep;
     PaAlsaDeviceInfo *hwDeviceInfos;
     PaAlsaDeviceInfo *deviceInfoArray;
-    int devIdx;
+    int numCards, devIdx;
     PaError result = paNoError;
-    int numDeviceNames = 0, numPcmNames = 0, i;
+    int numHwDeviceNames = 0, numPcmNames = 0, numExtDevs = 0, i, j;
     DevInfo *hwDevInfos = NULL; /* Buildup an array of structs with hw info */
     DevInfo *pcmDevInfos = NULL; /* Buildup an array of structs with pcm info */
     int blocking = SND_PCM_NONBLOCK;
@@ -661,52 +643,96 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     PaTime startTime = PaUtil_GetTime();
 #endif
 
+/*---- Set any config options in place ----*/
+
     if( getenv( "PA_ALSA_INITIALIZE_BLOCK" ) && atoi( getenv( "PA_ALSA_INITIALIZE_BLOCK" ) ) )
         blocking = 0;
     /* If PA_ALSA_PLUGHW is 1 (non-zero), use the plughw: pcm throughout instead of hw: */
     if( getenv( "PA_ALSA_PLUGHW" ) && atoi( getenv( "PA_ALSA_PLUGHW" ) ) )
+    {
         usePlughw = 1;
+        PA_DEBUG(( "%s: env 'Alsa Plughw' set, for all hw devices\n", __FUNCTION__ ));
+    }
 
     /* These two will be set to the first working input and output device, respectively */
     baseApi->info.defaultInputDevice = paNoDevice;
     baseApi->info.defaultOutputDevice = paNoDevice;
 
-    /* Get info about hardware available; memory for hwDevInfos is allocated, info put in, numDeviceNames incremented */
-    PA_ENSURE( FindHardwareCardDevSub( alsaApi, &hwDevInfos, &numDeviceNames, usePlughw) );
+
+/*---- Find out details about the audio system ----*/
+
+    /* Get info about hardware available; memory for hwDevInfos is allocated, info put in, numHwDeviceNames incremented */
+    PA_ENSURE( FindHardwareCardDevSub( alsaApi, &hwDevInfos, &numHwDeviceNames, &numCards, usePlughw) );
+
+    PA_DEBUG(( "%s: Number of cards: %d\n", __FUNCTION__, numCards ));
 
     /* Allocate memory, just for the hw device info structs; since this is contiguous, it can be indexed into */
     PA_UNLESS( hwDeviceInfos = (PaAlsaDeviceInfo*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
-                sizeof(PaAlsaDeviceInfo) * (numDeviceNames) ), paInsufficientMemory );
+                sizeof(PaAlsaDeviceInfo) * (numHwDeviceNames) ), paInsufficientMemory );
 
-    /* Loop over list of cards/devices/[sub-devs], filling in info.
+    /* Loop over list of cards/devices/[sub-devs] now, filling in info, as it is useful in making pcm choices.
      * If a device is deemed unavailable, it is ignored. */
     devIdx = 0; /* This will be incremented by FillInDevInfo() if the device is not skipped */
-    PA_DEBUG(( "%s: Filling hw device info for %d devices\n", __FUNCTION__, numDeviceNames ));
-    for( i = 0; i < numDeviceNames; ++i )
+    PA_DEBUG(( "%s: Filling hw device info for %d devices\n", __FUNCTION__, numHwDeviceNames ));
+    for( i = 0; i < numHwDeviceNames; ++i )
     {
         PaAlsaDeviceInfo *devInfo = &hwDeviceInfos[i];
         DevInfo *hwInfo = &hwDevInfos[i];
 
         PA_ENSURE( FillInDevInfo( alsaApi, hwInfo, blocking, devInfo, &devIdx ) );
     }
-    assert( devIdx <= numDeviceNames );
-    numDeviceNames = devIdx; /* This will reduce it to the actual number in the list */
+    assert( devIdx <= numHwDeviceNames );
+    numHwDeviceNames = devIdx; /* This will reduce it to the actual number in the list */
 
 
     /* Get info about the Alsa pcms; memory for pcmDevInfos is allocated, info put in, numPcmNames incremented */
     PA_ENSURE( ListValidPcms( alsaApi, &pcmDevInfos, &numPcmNames ) );
 
 
+/*---- Determine what to present to the 'user' as Portaudio 'devices' ----*/
+
+    /* We now know the hardware (card, device [sub-dev]) and available pcms.
+     * Each pcm can open some parts of the hardware.
+     * To help clarify the options, distinguish the Pa devices as either 'basic' or 'extended':
+     *     Basic ones - closely mirror the underlying hardware; these use just the 'hw' and 'plughw' pcms
+     *     Extended ones - these pull in complex Alsa functionality such as routing & conversions and normally
+     *            operate at the 'card' level only.  All other pcms create devices in this category. */
+
+    /* The 'basic' pa_devices correspond to the existing hwDevice list.  For the 'extended' devices,
+     * form yet another (tmp) list of DevInfo structs, as most pcms should be listed for each card. */
+    DevInfo *extDevInfos = NULL; /* Buildup an array of structs with extended devices info */
+    const PcmDevConfig *predefinedPcm = NULL;
+
+    for( i = 0; i < numPcmNames; i++ )
+    {
+        //PA_DEBUG(( "%s: Check name %d: %s\n", __FUNCTION__, i, pcmDevInfos[i].name ));
+        predefinedPcm = FindPcmPredef( pcmDevInfos[i].name );
+        if( predefinedPcm && predefinedPcm->cardsFlags != 0 )
+        {
+            for( j = 0; j < numCards; j++ )
+            {
+                //PA_DEBUG(( "%s: Ext device, each card %d: %s\n", __FUNCTION__, j, pcmDevInfos[i].name ));
+                if( predefinedPcm->cardsFlags & ( 1 << j ) ) /* The corresponding bit is set */
+                    PA_ENSURE( AddDeviceToList( alsaApi, &extDevInfos, pcmDevInfos[i], &numExtDevs, j ) );
+            }
+        }
+        else
+        {
+            PA_ENSURE( AddDeviceToList( alsaApi, &extDevInfos, pcmDevInfos[i], &numExtDevs, -1 ) ); /* Indicate no card ext with '-1' */
+        }
+    }
+
+
     /* The last stage is to build the final list of Alsa 'Portaudio-devices',
-       since we now know the hardware (card, device [sub-dev]) and available pcms.
-       For now, as previously, simply list the hw devices, then the pcms */
+     * For now, list the hw devices, then the extended pcms in the order they come */
 
-    /* Allocate deviceInfos array based on the total number of devices (hw and extended/pcms) */
+
+    /* Allocate deviceInfos array based on the total number of devices (basic/hw and extended) */
     PA_UNLESS( baseApi->deviceInfos = (PaDeviceInfo**)PaUtil_GroupAllocateMemory( alsaApi->allocations,
-                sizeof(PaDeviceInfo*) * (numDeviceNames+numPcmNames) ), paInsufficientMemory );
+                sizeof(PaDeviceInfo*) * (numHwDeviceNames+numExtDevs) ), paInsufficientMemory );
 
-    /* Fill the first deviceInfos pointers from the hwDeviceInfos array of structs */
-    for( i = 0; i < numDeviceNames; ++i )
+    /* Fill the first deviceInfos pointers from the hwDeviceInfos array of structs that are already filled in */
+    for( i = 0; i < numHwDeviceNames; ++i )
     {
         PaAlsaDeviceInfo *devInfo = &hwDeviceInfos[i];
         PA_DEBUG(( "%s: Adding basic device %d: %s\n", __FUNCTION__, i, devInfo->baseDeviceInfo.name ));
@@ -714,24 +740,22 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     }
 
 
-
     /* Allocate info structs for the extended/pcms in a contiguous block */
     PA_UNLESS( deviceInfoArray = (PaAlsaDeviceInfo*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
-                sizeof(PaAlsaDeviceInfo) * (numPcmNames) ), paInsufficientMemory );
+                sizeof(PaAlsaDeviceInfo) * (numExtDevs) ), paInsufficientMemory );
 
-    /* Now loop over the PCMs (for now), and leave default to last
+    /* Now loop over the extended device list, filling in the final info.
      * Note that we do this in two stages. This is a workaround owing to the fact that the 'dmix'
      * plugin may cause the underlying hardware device to be busy for a short while even after it
      * (dmix) is closed. The 'default' plugin may also point to the dmix plugin, so the same goes
-     * for this.
-     */
-    PA_DEBUG(( "%s: Filling pcm device info for %d devices\n", __FUNCTION__, numPcmNames ));
-    for( i = 0; i < numPcmNames; ++i )
+     * for this. */
+    PA_DEBUG(( "%s: Filling pcm device info for %d devices\n", __FUNCTION__, numExtDevs ));
+    for( i = 0; i < numExtDevs; ++i )
     {
         PaAlsaDeviceInfo *devInfo = &deviceInfoArray[i];
-        DevInfo *pcmInfo = &pcmDevInfos[i];
+        DevInfo *pcmInfo = &extDevInfos[i];
         int priorIdx = devIdx;
-        if( !strcmp( pcmInfo->name, "dmix" ) || !strcmp( pcmInfo->name, "default" ) )
+        if( !strncmp( pcmInfo->name, "dmix", 4 ) || !strncmp( pcmInfo->name, "default", 7 ) )
             continue;
 
         PA_ENSURE( FillInDevInfo( alsaApi, pcmInfo, blocking, devInfo, &devIdx ) );
@@ -743,12 +767,12 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     }
 
     /* Now inspect 'dmix' and 'default' plugins */
-    for( i = 0; i < numPcmNames; ++i )
+    for( i = 0; i < numExtDevs; ++i )
     {
         PaAlsaDeviceInfo *devInfo = &deviceInfoArray[i];
-        DevInfo *pcmInfo = &pcmDevInfos[i];
+        DevInfo *pcmInfo = &extDevInfos[i];
         int priorIdx = devIdx;
-        if( strcmp( pcmInfo->name, "dmix" ) && strcmp( pcmInfo->name, "default" ) )
+        if( strncmp( pcmInfo->name, "dmix", 4 ) && strncmp( pcmInfo->name, "default", 7 ) )
             continue;
 
         PA_ENSURE( FillInDevInfo( alsaApi, pcmInfo, blocking, devInfo, &devIdx ) );
@@ -758,10 +782,11 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
             baseApi->deviceInfos[devIdx-1] = (PaDeviceInfo *)devInfo;
         }
     }
-    assert( devIdx <= numDeviceNames+numPcmNames );
+    assert( devIdx <= numHwDeviceNames+numExtDevs );
 
     free( hwDevInfos );
-    free( pcmDevInfos );
+    free( pcmDevInfos ); // TODO may wish to free name allocations not in the final list?
+    free( extDevInfos );
 
     baseApi->info.deviceCount = devIdx;   /* Number of successfully queried devices */
 
