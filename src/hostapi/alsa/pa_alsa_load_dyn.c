@@ -164,6 +164,8 @@ _PA_DEFINE_FUNC(snd_pcm_info_set_subdevice);
 _PA_DEFINE_FUNC(snd_pcm_info_set_stream);
 _PA_DEFINE_FUNC(snd_pcm_info_get_name);
 _PA_DEFINE_FUNC(snd_pcm_info_get_card);
+_PA_DEFINE_FUNC(snd_pcm_info_get_subdevices_count);
+_PA_DEFINE_FUNC(snd_pcm_info_get_subdevice_name);
 
 _PA_DEFINE_FUNC(snd_ctl_pcm_next_device);
 _PA_DEFINE_FUNC(snd_ctl_pcm_info);
@@ -319,6 +321,8 @@ static void load_alsa_functions(void *lib_handle)
     _PA_LOAD_FUNC(snd_ctl_card_info);
     _PA_LOAD_FUNC(snd_ctl_card_info_sizeof);
     _PA_LOAD_FUNC(snd_ctl_card_info_get_name);
+    _PA_LOAD_FUNC(snd_pcm_info_get_subdevices_count);
+    _PA_LOAD_FUNC(snd_pcm_info_get_subdevice_name);
 
     _PA_LOAD_FUNC(snd_config);
     _PA_LOAD_FUNC(snd_config_update);

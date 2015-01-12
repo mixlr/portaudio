@@ -85,6 +85,12 @@
     } while (0)
 
 
+/* Specific values used in _BuildList() predefine tables */
+#define ALL_C (-11)
+#define END (-127)
+
+
+
 /* PaAlsaHostApiRepresentation - host api datastructure specific to this implementation */
 typedef struct PaAlsaHostApiRepresentation
 {
@@ -121,18 +127,19 @@ typedef enum
 /* Helper structs for the predefines */
 typedef struct
 {
-    int cardIdx; /* The Alsa card index */
+    int cardIdx;    /* The Alsa card index, for matching (or 'ALL_C' (-11) all/any) */
+    char *cardName; /* A card name for matching (or NULL to ignore) */
     unsigned int devicesFlags;  /* Each flag enables listing the corresponding device */
     unsigned int subdevFlags;   /* Bit set will enable listing of the sub-devices */
-    unsigned int plughwFlags;    /* Bit set activates plughw on the corresponding device */
+    unsigned int plughwFlags;   /* Bit set activates plughw on the corresponding device */
 } CardHwConfig;
 
 typedef struct
 {
-    char *pcmName;
+    char *pcmName;  /* The Alsa pcm name str (for matching) */
     int numPlaybackChans;
     int numCaptureChans;
-    unsigned int cardsFlags;
+    unsigned int cardsFlags;    /* Each flag enables listing pcm with the corresponding card */
 } PcmDevConfig;
 
 

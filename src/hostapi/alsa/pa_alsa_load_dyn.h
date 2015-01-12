@@ -157,6 +157,8 @@ _PA_DECLARE_FUNC(snd_pcm_info_set_subdevice);
 _PA_DECLARE_FUNC(snd_pcm_info_set_stream);
 _PA_DECLARE_FUNC(snd_pcm_info_get_name);
 _PA_DECLARE_FUNC(snd_pcm_info_get_card);
+_PA_DECLARE_FUNC(snd_pcm_info_get_subdevices_count);
+_PA_DECLARE_FUNC(snd_pcm_info_get_subdevice_name);
 #define alsa_snd_pcm_info_alloca(ptr) __alsa_snd_alloca(ptr, snd_pcm_info)
 
 _PA_DECLARE_FUNC(snd_ctl_pcm_next_device);

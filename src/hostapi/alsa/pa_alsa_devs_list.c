@@ -47,6 +47,7 @@
 #define PA_ENABLE_DEBUG_OUTPUT
 
 #include <limits.h>
+#include <ctype.h>
 
 #include "pa_util.h"
 #include "pa_unix_util.h"
@@ -75,29 +76,62 @@ typedef struct
 } DevInfo;
 
 
+/* Keep a record of the (sound-)cards found; limit name size, Alsa card names are 31 max plus '\0' */
+#define CARDS_DATA_NAME_LEN  32
+typedef struct
+{
+    char cdName[CARDS_DATA_NAME_LEN];
+    char *pcmWhitelist;
+    char *pcmBlacklist;
+} CdData;
+
+typedef struct
+{
+    int numCards;
+    CdData *cardData;   /* An array of the CdData structs, allocated */
+} CardsData;
+
+
+/* Check for matching occurance of name2 in name1.  Case ignore could be added here eg a prefix '~' to name2 */
+static int NameMatches( const char *name1, char *name2 )
+{
+    return strstr( name1, name2 ) != NULL ? 1 : 0;
+}
+
+
 static const CardHwConfig *FindCardPredef( int cIdx, const char *cName )
 {
-    /* For now, don't match by name; ignore it */
-    (void) cName;
-    int i;
+    /* The match process could be by name or index, or both required.  The FIRST matching entry is returned.
+     * In the predefines, NULL name is ignored; cardIdx ALL_C (-11) is a special 'all' cards value. */
+    char *thisName;
+    int i, thisIdx;
 
-    for( i = 0; predefinedHw[i].cardIdx > -127; i++ ) /* '-127' is the end marker */
+    for( i = 0; predefinedHw[i].cardIdx > END; i++ ) /* 'END' (-127) is the table end marker */
     {
-        if( predefinedHw[i].cardIdx == cIdx )
+        thisIdx = predefinedHw[i].cardIdx;
+        thisName = predefinedHw[i].cardName;
+
+        if( thisName != NULL )
+            PA_DEBUG(( "%s: Name match: %s ?? %s\n", __FUNCTION__, cName, thisName ));
+
+        if(( thisIdx == ALL_C || thisIdx == cIdx ) && ( thisName == NULL || NameMatches( cName, thisName ) ))
+        {
+            PA_DEBUG(( "%s: Found card predefine: %d\n", __FUNCTION__, i ));
             return &predefinedHw[i];
+        }
     }
 
     return NULL;
 }
 
 
-static const PcmDevConfig *FindPcmPredef( const char *name )
+static const PcmDevConfig *FindPcmPredef( const char *pName )
 {
     int i;
 
     for( i = 0; predefinedPcms[i].pcmName; i++ )
     {
-        if( strcmp( name, predefinedPcms[i].pcmName ) == 0 )
+        if( strcmp( pName, predefinedPcms[i].pcmName ) == 0 )
             return &predefinedPcms[i];
     }
 
@@ -373,13 +407,13 @@ end:
  * this is NULL, and devCount 0, and memory is allocated as needed (later free() is required).
  * The DevInfo structs will be filled with brief info for each item found */
 static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, DevInfo **hwDevInfosHdle,
-                                        int *devCount, int *cardCount, unsigned int usePlughw )
+                                        int *devCount, CardsData *cardsInf, unsigned int usePlughw )
 {
     DevInfo *foundHwDevInfos = *hwDevInfosHdle;
     PaError result = paNoError;
     snd_ctl_card_info_t *cardInfo;
     snd_pcm_info_t *pcmInfo;
-    int cardIdx = -1;
+    int cardIdx = -1, maxCardsInfNames = 0;
     char alsaCardStr[10]; /* The string used to open the snd_ctl interface (typically hw:x) */
     char *hwPrefix = "";
     int maxDeviceNames = *devCount > 0 ? *devCount: 1; /* At least this amount of space must aleady be allocated */
@@ -419,57 +453,87 @@ static PaError FindHardwareCardDevSub( PaAlsaHostApiRepresentation *alsaApi, Dev
         while( alsa_snd_ctl_pcm_next_device( ctl, &deviceIdx ) == 0 && deviceIdx >= 0 )
         {
             char *alsaDeviceName, *deviceName, *infoName;
+            const char *subdeviceName;
             size_t len;
-            int chansPlayback = 0, chansCapture = 0, usePlug;
+            int chansPlayback = 0, chansCapture = 0, usePlug, trySubdevices;
+            int subdevIdx, subdevCount = 1;
 
-            /* Obtain info about this particular device */
-            alsa_snd_pcm_info_set_device( pcmInfo, deviceIdx );
-            alsa_snd_pcm_info_set_subdevice( pcmInfo, 0 );
-            alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_CAPTURE );
-            if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
-                chansCapture = CHANS_UNKNOWN;
+            if( cardPredef && (cardPredef->devicesFlags & ( 1 << deviceIdx ) ) == 0 )
+                continue; /* This device is not set in the card-device predefine, so skip it */
 
-            alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_PLAYBACK );
-            if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
-                chansPlayback = CHANS_UNKNOWN;
+            trySubdevices = ( cardPredef && (cardPredef->subdevFlags & ( 1 << deviceIdx ) ) );
 
-            if( chansPlayback == 0 && chansCapture == 0 )
-                continue; /* Unexpected, but just move on to the next! */
-
-            /* The 'plughw:' pcm will be used instead of 'hw:', set either globally or in a card config */
-            usePlug = usePlughw || ( cardPredef && (cardPredef->plughwFlags & ( 1 << deviceIdx ) ));
-            hwPrefix = usePlug ? "plug" : "";
-
-            PA_DEBUG(( "%s %d", (deviceIdx == 0 ? "  ..devices (indexes):" : ","), deviceIdx ));
-
-            /* Put together the names for the device info, allocating memory */
-            infoName = SkipCardDetailsInName( (char *)alsa_snd_pcm_info_get_name( pcmInfo ), cardName );
-            snprintf( buf, sizeof (buf), "%s%s,%d", hwPrefix, alsaCardStr, deviceIdx );
-            /* Workout the length of the string written by snprintf plus terminating 0 */
-            len = snprintf( NULL, 0, "%s: %s (%s)", cardName, infoName, buf ) + 1;
-            PA_UNLESS( deviceName = (char *)PaUtil_GroupAllocateMemory( alsaApi->allocations, len ),
-                    paInsufficientMemory );
-            snprintf( deviceName, len, "%s: %s (%s)", cardName, infoName, buf );
-
-            (*devCount)++;
-            if( !foundHwDevInfos || *devCount > maxDeviceNames )
+            /* Can loop over sub-devices - normally just list the first, unless set in card predefine */
+            for( subdevIdx = 0; subdevIdx < subdevCount; ++subdevIdx )
             {
-                maxDeviceNames *= 2;
-                PA_UNLESS( foundHwDevInfos = (DevInfo *) realloc( foundHwDevInfos, maxDeviceNames * sizeof (DevInfo) ),
-                        paInsufficientMemory );
+                /* Obtain info about this particular device */
+                alsa_snd_pcm_info_set_device( pcmInfo, deviceIdx );
+                alsa_snd_pcm_info_set_subdevice( pcmInfo, subdevIdx );
+                alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_CAPTURE );
+                if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
+                    chansCapture = CHANS_UNKNOWN;
+
+                alsa_snd_pcm_info_set_stream( pcmInfo, SND_PCM_STREAM_PLAYBACK );
+                if( alsa_snd_ctl_pcm_info( ctl, pcmInfo ) >= 0 )
+                    chansPlayback = CHANS_UNKNOWN;
+
+                if( chansPlayback == 0 && chansCapture == 0 )
+                    continue; /* Unexpected, but just move on to the next! */
+
+                /* Get sub-device count */
+                if( trySubdevices && subdevIdx == 0 )
+                    subdevCount = alsa_snd_pcm_info_get_subdevices_count( pcmInfo );
+
+                /* The 'plughw:' pcm will be used instead of 'hw:' if set either globally or in a card config */
+                usePlug = usePlughw || ( cardPredef && (cardPredef->plughwFlags & ( 1 << deviceIdx ) ));
+                hwPrefix = usePlug ? "plug" : "";
+
+                if( subdevIdx == 0 )
+                    PA_DEBUG(( "%s %d%s", (deviceIdx == 0 ? "  ..devices (indexes):" : ","),
+                                deviceIdx, ( subdevCount > 1 ? "s" : "" ) ));
+
+                /* Put together the names for the device info, allocating memory */
+                infoName = SkipCardDetailsInName( (char *)alsa_snd_pcm_info_get_name( pcmInfo ), cardName );
+                snprintf( buf, sizeof(buf), ( subdevCount > 1 ? "%s%s,%d,%d" : "%s%s,%d" ),
+                            hwPrefix, alsaCardStr, deviceIdx, subdevIdx );
+
+                subdeviceName = ( subdevCount > 1 ) ? alsa_snd_pcm_info_get_subdevice_name( pcmInfo ) : "";
+
+                /* Workout the length of the string written by snprintf plus terminating 0 */
+                len = snprintf( NULL, 0, "%s: %s (%s) {%s}", cardName, infoName, buf, subdeviceName ) + 1;
+                PA_UNLESS( deviceName = (char *)PaUtil_GroupAllocateMemory( alsaApi->allocations, len ),
+                            paInsufficientMemory );
+                snprintf( deviceName, len, ( subdevCount > 1 ? "%s: %s (%s) {%s}" : "%s: %s (%s)" ),
+                            cardName, infoName, buf, subdeviceName );
+
+                (*devCount)++;
+                if( !foundHwDevInfos || *devCount > maxDeviceNames )
+                {
+                    maxDeviceNames *= 2;
+                    PA_UNLESS( foundHwDevInfos = (DevInfo *) realloc( foundHwDevInfos, maxDeviceNames * sizeof (DevInfo) ),
+                                paInsufficientMemory );
+                }
+
+                PA_ENSURE( StrDuplA( alsaApi, &alsaDeviceName, buf ) );
+
+                foundHwDevInfos[*devCount - 1].alsaName = alsaDeviceName;
+                foundHwDevInfos[*devCount - 1].name = deviceName;
+                foundHwDevInfos[*devCount - 1].isPlug = usePlug;
+                foundHwDevInfos[*devCount - 1].maxChansPlayback = chansPlayback;
+                foundHwDevInfos[*devCount - 1].maxChansCapture = chansCapture;
             }
-
-            PA_ENSURE( StrDuplA( alsaApi, &alsaDeviceName, buf ) );
-
-            foundHwDevInfos[*devCount - 1].alsaName = alsaDeviceName;
-            foundHwDevInfos[*devCount - 1].name = deviceName;
-            foundHwDevInfos[*devCount - 1].isPlug = usePlug;
-            foundHwDevInfos[*devCount - 1].maxChansPlayback = chansPlayback;
-            foundHwDevInfos[*devCount - 1].maxChansCapture = chansCapture;
         }
         PA_DEBUG(( "\n" ));
         alsa_snd_ctl_close( ctl );
-        *cardCount = cardIdx + 1; /* The last time round the loop will leave the count correct */
+        cardsInf->numCards = cardIdx + 1; /* The last time round the loop will leave the count correct */
+        if( cardsInf->cardData == NULL || cardsInf->numCards > maxCardsInfNames )
+        {
+            maxCardsInfNames += 4;
+            PA_UNLESS( cardsInf->cardData = realloc( cardsInf->cardData, maxCardsInfNames * sizeof( CdData ) ),
+                        paInsufficientMemory );
+        }
+        strncpy( cardsInf->cardData[cardIdx].cdName, cardName, CARDS_DATA_NAME_LEN );
+        cardsInf->cardData[cardIdx].cdName[CARDS_DATA_NAME_LEN - 1] = 0;    /* Best to be sure! */
     }
     *hwDevInfosHdle = foundHwDevInfos; /* Pass back the handle to the DevInfo structs */
 
@@ -537,6 +601,10 @@ static PaError ListValidPcms( PaAlsaHostApiRepresentation *alsaApi, DevInfo **pc
             PA_UNLESS( deviceName = (char*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
                                                             strlen(idStr) + 1 ), paInsufficientMemory );
             strcpy( deviceName, idStr );
+            if( strncmp( deviceName, "iec958", 6 ) == 0 )
+                strncpy( deviceName, "IEC", 3 );    /* One special case */
+            if( islower( deviceName[0] ) )
+                deviceName[0] -= 32;    /* Let's have a capital first letter, always */
 
             (*devCount)++;
             if( !foundPcmDevInfos || *devCount > maxPcmNames )
@@ -573,20 +641,22 @@ error:
 }
 
 
-/* Add a pcm-type device to a given device list, possibly as an extended device with card suffix if an idex is given */
-PaError AddDeviceToList( PaAlsaHostApiRepresentation *alsaApi, DevInfo **dstInfosHdle, DevInfo srcInfos, int *devCount, int cdIdx )
+/* Add a pcm-type device to a given device list, possibly as an extended device with card suffix if an index is given */
+PaError AddDeviceToList( PaAlsaHostApiRepresentation *alsaApi, DevInfo **dstInfosHdle, DevInfo srcInfos,
+                            int *devCount, int cdIdx, char *cdName )
 {
     DevInfo *addedDevInfos = *dstInfosHdle;
     PaError result = paNoError;
-    char *deviceName;
+    char *alsaNameStr, *infoDeviceName;
     int maxAddedDevs = *devCount > 0 ? *devCount: 1;
+    size_t len;
 
-    PA_UNLESS( deviceName = (char*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
+    PA_UNLESS( alsaNameStr = (char*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
                                                             strlen(srcInfos.name) + 4 ), paInsufficientMemory );
     if( cdIdx < 0 )
-        strcpy( deviceName, srcInfos.name ); /* Don't add  card suffix */
+        strcpy( alsaNameStr, srcInfos.alsaName ); /* Don't add  card suffix */
     else
-        sprintf( deviceName, "%s:%d", srcInfos.name, cdIdx );
+        sprintf( alsaNameStr, "%s:%d", srcInfos.alsaName, cdIdx );
 
     (*devCount)++;
     if( !addedDevInfos || *devCount > maxAddedDevs )
@@ -596,11 +666,17 @@ PaError AddDeviceToList( PaAlsaHostApiRepresentation *alsaApi, DevInfo **dstInfo
                 paInsufficientMemory );
     }
 
-    PA_DEBUG(( "%s: Forming extended device %d: %s\n", __FUNCTION__, *devCount, deviceName ));
+    /* Create a helpful Pa_device name; (workout the string length written by snprintf plus terminating 0) */
+    len = snprintf( NULL, 0, "%s: %s (%s)", cdName, srcInfos.name, alsaNameStr ) + 1;
+    PA_UNLESS( infoDeviceName = (char *)PaUtil_GroupAllocateMemory( alsaApi->allocations, len ),
+                paInsufficientMemory );
+    snprintf( infoDeviceName, len, cdName ? "%3$s: %1$s (%2$s)" : "%s (%s)", srcInfos.name, alsaNameStr, cdName );
+
+    PA_DEBUG(( "%s: Forming extended device %d: %s\n", __FUNCTION__, *devCount, alsaNameStr ));
     /* Copy the info src->dst, and overwrite the names */
     memcpy( &addedDevInfos[*devCount - 1], &srcInfos, sizeof(DevInfo) );
-    addedDevInfos[*devCount - 1].alsaName = deviceName;
-    addedDevInfos[*devCount - 1].name     = deviceName;
+    addedDevInfos[*devCount - 1].alsaName = alsaNameStr;
+    addedDevInfos[*devCount - 1].name     = infoDeviceName;
 
     *dstInfosHdle = addedDevInfos; /* Pass back the handle to the DevInfo structs */
 
@@ -632,11 +708,12 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     PaUtilHostApiRepresentation *baseApi = &alsaApi->baseHostApiRep;
     PaAlsaDeviceInfo *hwDeviceInfos;
     PaAlsaDeviceInfo *deviceInfoArray;
-    int numCards, devIdx;
     PaError result = paNoError;
-    int numHwDeviceNames = 0, numPcmNames = 0, numExtDevs = 0, i, j;
+    int devIdx, i, j;
+    int numHwDeviceNames = 0, numPcmNames = 0, numExtDevs = 0;
     DevInfo *hwDevInfos = NULL; /* Buildup an array of structs with hw info */
     DevInfo *pcmDevInfos = NULL; /* Buildup an array of structs with pcm info */
+    CardsData cardsInfo = {.numCards = 0, .cardData = NULL};
     int blocking = SND_PCM_NONBLOCK;
     int usePlughw = 0;
 #ifdef PA_ENABLE_DEBUG_OUTPUT
@@ -662,9 +739,11 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
 /*---- Find out details about the audio system ----*/
 
     /* Get info about hardware available; memory for hwDevInfos is allocated, info put in, numHwDeviceNames incremented */
-    PA_ENSURE( FindHardwareCardDevSub( alsaApi, &hwDevInfos, &numHwDeviceNames, &numCards, usePlughw) );
+    PA_ENSURE( FindHardwareCardDevSub( alsaApi, &hwDevInfos, &numHwDeviceNames, &cardsInfo, usePlughw) );
 
-    PA_DEBUG(( "%s: Number of cards: %d\n", __FUNCTION__, numCards ));
+    PA_DEBUG(( "%s: Number of cards: %d\n", __FUNCTION__, cardsInfo.numCards ));
+    for( i = 0; i < cardsInfo.numCards; i++ )
+        PA_DEBUG(( "%s: Card %d: %s\n", __FUNCTION__, i, cardsInfo.cardData[i].cdName ));
 
     /* Allocate memory, just for the hw device info structs; since this is contiguous, it can be indexed into */
     PA_UNLESS( hwDeviceInfos = (PaAlsaDeviceInfo*)PaUtil_GroupAllocateMemory( alsaApi->allocations,
@@ -702,23 +781,26 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
      * form yet another (tmp) list of DevInfo structs, as most pcms should be listed for each card. */
     DevInfo *extDevInfos = NULL; /* Buildup an array of structs with extended devices info */
     const PcmDevConfig *predefinedPcm = NULL;
+    char *hwCardName;
 
     for( i = 0; i < numPcmNames; i++ )
     {
         //PA_DEBUG(( "%s: Check name %d: %s\n", __FUNCTION__, i, pcmDevInfos[i].name ));
-        predefinedPcm = FindPcmPredef( pcmDevInfos[i].name );
+        predefinedPcm = FindPcmPredef( pcmDevInfos[i].alsaName );
         if( predefinedPcm && predefinedPcm->cardsFlags != 0 )
         {
-            for( j = 0; j < numCards; j++ )
+            for( j = 0; j < cardsInfo.numCards; j++ )
             {
+                hwCardName = cardsInfo.cardData[j].cdName;
                 //PA_DEBUG(( "%s: Ext device, each card %d: %s\n", __FUNCTION__, j, pcmDevInfos[i].name ));
                 if( predefinedPcm->cardsFlags & ( 1 << j ) ) /* The corresponding bit is set */
-                    PA_ENSURE( AddDeviceToList( alsaApi, &extDevInfos, pcmDevInfos[i], &numExtDevs, j ) );
+                    PA_ENSURE( AddDeviceToList( alsaApi, &extDevInfos, pcmDevInfos[i], &numExtDevs, j, hwCardName ) );
             }
         }
         else
         {
-            PA_ENSURE( AddDeviceToList( alsaApi, &extDevInfos, pcmDevInfos[i], &numExtDevs, -1 ) ); /* Indicate no card ext with '-1' */
+             /* Note, in this call indicate no card extension to the pcm with '-1' (and NULL name) */
+            PA_ENSURE( AddDeviceToList( alsaApi, &extDevInfos, pcmDevInfos[i], &numExtDevs, -1, NULL ) );
         }
     }
 
@@ -785,6 +867,7 @@ PaError AlsaDevs_BuildList( PaAlsaHostApiRepresentation *alsaApi )
     assert( devIdx <= numHwDeviceNames+numExtDevs );
 
     free( hwDevInfos );
+    free( cardsInfo.cardData );
     free( pcmDevInfos ); // TODO may wish to free name allocations not in the final list?
     free( extDevInfos );
 
