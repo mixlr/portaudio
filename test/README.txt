@@ -19,12 +19,13 @@ the tests pass, just that they compile.
     x- patest_clip.c (last test fails, dither doesn't currently force clip in V19)
     x- patest_dither.c
     x- patest_hang.c
+    x- patest_initex.c
     x- patest_latency.c
     x- patest_leftright.c
     x- patest_longsine.c
     x- patest_many.c
     x- patest_maxsines.c
-	x- patest_mono.c
+    x- patest_mono.c
     x- patest_multi_sine.c
     x- patest_pink.c
     x- patest_prime.c
@@ -40,7 +41,7 @@ the tests pass, just that they compile.
     x- patest_stop.c
     x- patest_sync.c
     x- patest_toomanysines.c
-	x- patest_two_rates.c
+    x- patest_two_rates.c
     x- patest_underflow.c
     x- patest_wire.c
     x- patest_write_sine.c

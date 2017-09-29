@@ -112,6 +112,10 @@
 #define PA_VERSION_STRING_ TOSTRING(paVersionMajor) "." TOSTRING(paVersionMinor) "." TOSTRING(paVersionSubMinor)
 #define PA_VERSION_TEXT_   "PortAudio V" PA_VERSION_STRING_ "-devel, revision " TOSTRING(PA_GIT_REVISION)
 
+#if !defined(offsetof)
+#define offsetof(st, m) ((size_t)(&((st *)0)->m))
+#endif
+
 int Pa_GetVersion( void )
 {
     return paVersion;
@@ -169,7 +173,7 @@ static int CountHostApiInitializers( void )
 {
     int result = 0;
 
-    while( paHostApiInitializers[ result ] != 0 )
+    while( paHostApiInitializers[ result ].initApi != 0 )
         ++result;
     return result;
 }
@@ -197,12 +201,22 @@ static void TerminateHostApis( void )
 }
 
 
-static PaError InitializeHostApis( void )
+static PaError InitializeHostApis( PaInitializationControl *initCtl )
 {
     PaError result = paNoError;
     int i, initializerCount, baseDeviceIndex;
+    PaHostApiTypeId *initializerList;
 
-    initializerCount = CountHostApiInitializers();
+    if (initCtl && initCtl->flags & PaInitializationControlFlagApiTypes )
+    {
+        initializerCount = initCtl->apiTypeCount;
+        initializerList = initCtl->apiTypes;
+    }
+    else
+    {
+        initializerCount = CountHostApiInitializers();
+        initializerList = NULL;
+    }
 
     hostApis_ = (PaUtilHostApiRepresentation**)PaUtil_AllocateMemory(
             sizeof(PaUtilHostApiRepresentation*) * initializerCount );
@@ -219,15 +233,39 @@ static PaError InitializeHostApis( void )
 
     for( i=0; i< initializerCount; ++i )
     {
+        PaUtilHostApiInitializers *hostInit;
+
         hostApis_[hostApisCount_] = NULL;
 
-        PA_DEBUG(( "before paHostApiInitializers[%d].\n",i));
+        hostInit = NULL;
+        if( initializerList )
+        {
+            int j;
 
-        result = paHostApiInitializers[i]( &hostApis_[hostApisCount_], hostApisCount_ );
-        if( result != paNoError )
-            goto error;
+            for (j = 0; paHostApiInitializers[ j ].initApi != NULL; ++j )
+            {
+                if( initializerList[i] == paHostApiInitializers[ j ].apiType )
+                {
+                    hostInit = &paHostApiInitializers[ j ];
+                    break;
+                }
+            }
+        }
+        else
+        {
+            hostInit = &paHostApiInitializers[ i ];
+        }
 
-        PA_DEBUG(( "after paHostApiInitializers[%d].\n",i));
+        if( hostInit )
+        {
+            PA_DEBUG(( "before paHostApiInitializers[%d] - type=%d.\n",i, hostInit->apiType));
+
+            result = hostInit->initApi( &hostApis_[hostApisCount_], hostApisCount_ );
+            if( result != paNoError )
+                goto error;
+
+            PA_DEBUG(( "after paHostApiInitializers[%d] - type=%d.\n",i, hostInit->apiType));
+        }
 
         if( hostApis_[hostApisCount_] )
         {
@@ -358,25 +396,59 @@ PaError Pa_Initialize( void )
 
     PA_LOGAPI_ENTER( "Pa_Initialize" );
 
-    if( PA_IS_INITIALISED_ )
+    result = Pa_InitializeEx( (PaInitializationControl *) NULL );
+
+    PA_LOGAPI_EXIT_PAERROR( "Pa_Initialize", result );
+
+    return result;
+}
+
+PaError Pa_InitializeEx( PaInitializationControl *initCtl )
+{
+    PaError result = paNoError;
+
+    PA_LOGAPI_ENTER( "Pa_InitializeEx" );
+
+    /* Validate initCtl is not newer than we expect */
+    if( initCtl != NULL )
     {
-        ++initializationCount_;
-        result = paNoError;
+        /* Validate apiType fields */
+        if( initCtl->flags & PaInitializationControlFlagApiTypes )
+        {
+            if( initCtl->version < 1 ||
+                initCtl->size < offsetof(PaInitializationControl, version1end) )
+            {
+                result = paNotInitialized; /* not really the right error */
+            }
+            else if( initCtl->apiTypeCount == 0 || initCtl->apiTypes == NULL )
+            {
+                result = paNotInitialized; /* not really the right error */
+            }
+        }
+
+        /* Validate additional fields here */
     }
-    else
+
+    if( result == paNoError && !(PA_IS_INITIALISED_) )
     {
+        int apiTypeCount;
+        PaHostApiTypeId apiTypes;
+
         PA_VALIDATE_TYPE_SIZES;
         PA_VALIDATE_ENDIANNESS;
 
         PaUtil_InitializeClock();
         PaUtil_ResetTraceMessages();
 
-        result = InitializeHostApis();
-        if( result == paNoError )
-            ++initializationCount_;
+        result = InitializeHostApis( initCtl );
     }
 
-    PA_LOGAPI_EXIT_PAERROR( "Pa_Initialize", result );
+    if( result == paNoError )
+    {
+        ++initializationCount_;
+    }
+    
+    PA_LOGAPI_EXIT_PAERROR( "Pa_InitializeEx", result );
 
     return result;
 }

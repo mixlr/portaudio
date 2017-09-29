@@ -178,9 +178,91 @@ const char *Pa_GetErrorText( PaError errorCode );
  @return paNoError if successful, otherwise an error code indicating the cause
  of failure.
 
- @see Pa_Terminate
+ @see Pa_Terminate, Pa_InitializeEx
 */
 PaError Pa_Initialize( void );
+
+
+/** Unchanging unique identifiers for each supported host API. This type
+ is used in the PaHostApiInfo structure. The values are guaranteed to be
+ unique and to never change, thus allowing code to be written that
+ conditionally uses host API specific extensions.
+
+ New type ids will be allocated when support for a host API reaches
+ "public alpha" status, prior to that developers should use the
+ paInDevelopment type id.
+
+ @see PaHostApiInfo
+*/
+typedef enum PaHostApiTypeId
+{
+    paInDevelopment=0, /* use while developing support for a new host API */
+    paDirectSound=1,
+    paMME=2,
+    paASIO=3,
+    paSoundManager=4,
+    paCoreAudio=5,
+    paOSS=7,
+    paALSA=8,
+    paAL=9,
+    paBeOS=10,
+    paWDMKS=11,
+    paJACK=12,
+    paWASAPI=13,
+    paAudioScienceHPI=14
+} PaHostApiTypeId;
+
+
+/** A structure used to control the initialization process. */
+
+#define PaInitializationControlVersion              1
+
+/** Version 1 flags */
+#define PaInitializationControlFlagApiTypes         (0x01)
+
+typedef struct PaInitializationControl
+{
+    /** Size of this struct */
+    unsigned long size;             /**< sizeof(PaInitializationControl) */
+    /** The version of this struct */
+    unsigned long version;          /**< PaInitializationControlVersion */
+    /** Mask indicating which of the following features are specified */
+    unsigned long flags;            /**< PaInitializationControlFlagXXX */
+
+    /** List of API types that should be initialized.  By default, all compiled
+     in APIs will be initialized and in an unspecified order.  Using this, you
+     may control exactly which APIs get initialized.  In addition, they will be
+     initialized in the order in which they appear in the apiTypes array.
+
+     Include PaInitializationControlFlagApiTypes in flags above to enable this
+     feature.
+
+     If enabled, you must specify at least one API type to initialize.
+
+     Version: 1
+    */
+    int apiTypeCount;               /**< number of entries in apiTypes */
+    PaHostApiTypeId *apiTypes;      /**< array of APIs */
+
+    int version1end;                /**< end of version 1 fields */
+
+} PaInitializationControl;
+
+
+/** Extended library initialization function - call this instead of Pa_Initialize()
+ to gain greater control of the initialization process.  The description, requirements,
+ and return information for Pa_Initialize() are also applicable here.
+
+ @param initCtl Pointer to an instance of PaInitializationControl that specifies
+ how initialization should be performed.  If a NULL pointer is passed, then
+ initializetion will proceed as if Pa_Initialize() had been called.
+ 
+ @return paNoError if successful, otherwise an error code indicating the cause
+ of failure.
+
+ @see Pa_Terminate, Pa_Initialize
+*/
+PaError Pa_InitializeEx( PaInitializationControl *initCtl );
 
 
 /** Library termination function - call this when finished using PortAudio.
@@ -259,36 +341,6 @@ PaHostApiIndex Pa_GetHostApiCount( void );
  negative) if PortAudio is not initialized or an error is encountered.
 */
 PaHostApiIndex Pa_GetDefaultHostApi( void );
-
-
-/** Unchanging unique identifiers for each supported host API. This type
- is used in the PaHostApiInfo structure. The values are guaranteed to be
- unique and to never change, thus allowing code to be written that
- conditionally uses host API specific extensions.
-
- New type ids will be allocated when support for a host API reaches
- "public alpha" status, prior to that developers should use the
- paInDevelopment type id.
-
- @see PaHostApiInfo
-*/
-typedef enum PaHostApiTypeId
-{
-    paInDevelopment=0, /* use while developing support for a new host API */
-    paDirectSound=1,
-    paMME=2,
-    paASIO=3,
-    paSoundManager=4,
-    paCoreAudio=5,
-    paOSS=7,
-    paALSA=8,
-    paAL=9,
-    paBeOS=10,
-    paWDMKS=11,
-    paJACK=12,
-    paWASAPI=13,
-    paAudioScienceHPI=14
-} PaHostApiTypeId;
 
 
 /** A structure containing information about a particular host API. */

@@ -353,8 +353,15 @@ typedef PaError PaUtilHostApiInitializer( PaUtilHostApiRepresentation**, PaHostA
  There is a platform specific file that defines paHostApiInitializers for that
  platform, pa_win/pa_win_hostapis.c contains the Win32 definitions for example.
 */
-extern PaUtilHostApiInitializer *paHostApiInitializers[];
 
+typedef struct PaUtilHostApiInitializers
+{
+   PaHostApiTypeId apiType;               /**< host API type */
+   PaUtilHostApiInitializer *initApi;     /**< initialization function */
+   
+} PaUtilHostApiInitializers;
+
+extern PaUtilHostApiInitializers paHostApiInitializers[];
 
 #ifdef __cplusplus
 }

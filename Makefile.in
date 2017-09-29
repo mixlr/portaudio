@@ -91,6 +91,7 @@ TESTS = \
 	bin/patest_dither \
 	bin/patest_hang \
 	bin/patest_in_overflow \
+	bin/patest_initex \
 	bin/patest_latency \
 	bin/patest_leftright \
 	bin/patest_longsine \
