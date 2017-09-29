@@ -55,7 +55,7 @@ PaError PaSkeleton_Initialize( PaUtilHostApiRepresentation **hostApi, PaHostApiI
 /** Note that on Linux, ALSA is placed before OSS so that the former is preferred over the latter.
  */
 
-PaUtilHostApiInitializer *paHostApiInitializers[] =
+PaUtilHostApiInitializers paHostApiInitializers[] =
     {
 #ifdef __linux__
 
