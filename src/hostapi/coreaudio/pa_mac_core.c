@@ -2484,6 +2484,9 @@ static OSStatus AudioIOProc( void *inRefCon,
                  INPUT_ELEMENT,
                  inNumberFrames,
                  &stream->inputAudioBufferList );
+         if( err == -10863 ) {
+           callbackResult = paAbort;
+         }
          if( err == -10874 )
             inNumberFrames /= 2;
       } while( err == -10874 && inNumberFrames > 1 );
