@@ -19,7 +19,6 @@ the tests pass, just that they compile.
     x- patest_clip.c (last test fails, dither doesn't currently force clip in V19)
     x- patest_dither.c
     x- patest_hang.c
-    x- patest_initex.c
     x- patest_latency.c
     x- patest_leftright.c
     x- patest_longsine.c
